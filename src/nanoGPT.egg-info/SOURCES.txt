@@ -1,0 +1,16 @@
+LICENSE
+README.md
+pyproject.toml
+src/__init__.py
+src/nanoGPT/__init__.py
+src/nanoGPT/causal_self_attention.py
+src/nanoGPT/decoder.py
+src/nanoGPT/gpt.py
+src/nanoGPT/gpt_config.py
+src/nanoGPT/layer_norm.py
+src/nanoGPT/mlp.py
+src/nanoGPT.egg-info/PKG-INFO
+src/nanoGPT.egg-info/SOURCES.txt
+src/nanoGPT.egg-info/dependency_links.txt
+src/nanoGPT.egg-info/requires.txt
+src/nanoGPT.egg-info/top_level.txt

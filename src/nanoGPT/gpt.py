@@ -3,6 +3,7 @@ import math
 
 import torch
 from torch import softmax
+import torch.nn
 from torch.nn import Module, ModuleDict, Embedding, Dropout, ModuleList, Linear, Parameter
 from torch.nn.functional import cross_entropy
 
@@ -13,11 +14,11 @@ from nanoGPT.layer_norm import LayerNorm
 
 def _init_weights(module):
     if isinstance(module, Linear):
-        torch.init.normal_(module.weight, mean=0.0, std=0.02)
+        torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         if module.bias is not None:
-            torch.init.zeros_(module.bias)
+            torch.nn.init.zeros_(module.bias)
     elif isinstance(module, Embedding):
-        torch.init.normal_(module.weight, mean=0.0, std=0.02)
+        torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
 
 class GPT(Module):
@@ -47,7 +48,7 @@ class GPT(Module):
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
-                torch.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))

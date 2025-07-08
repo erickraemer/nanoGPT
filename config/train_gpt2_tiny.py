@@ -12,6 +12,13 @@ batch_size = 8
 block_size = 512
 gradient_accumulation_steps = 5 * 1
 
+# model
+n_layer = 8
+n_head = 8
+n_active_heads = 4  # number of heads to use in attention
+activate_heads_after_n_epochs = 1000
+n_embd = 512
+
 # this makes total number of tokens be 300B
 max_iters = 600000
 lr_decay_iters = 600000
