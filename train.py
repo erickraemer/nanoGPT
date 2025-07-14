@@ -277,7 +277,7 @@ while True:
         print(f"activating all {n_head} heads after {activate_heads_after_n_epochs} epochs")
         dec: Block
         for dec in raw_model.transformer["h"]:
-            dec.n_active_heads = dec.n_head # activate all heads after n epochs
+            dec.attn.n_active_heads = dec.attn.n_head # activate all heads after n epochs
 
 
     # evaluate the loss on train/val sets and write checkpoints
