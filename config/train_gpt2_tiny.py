@@ -15,8 +15,8 @@ gradient_accumulation_steps = 5 * 1
 # model
 n_layer = 8
 n_head = 8
-n_active_heads = 4  # number of heads to use in attention
-activate_heads_after_n_epochs = 1000
+n_active_heads = 8  # number of to start with
+activate_heads_after_n_epochs = 600000 # when to activate all heads
 n_embd = 512
 
 # this makes total number of tokens be 300B

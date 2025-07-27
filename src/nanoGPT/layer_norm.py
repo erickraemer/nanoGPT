@@ -7,7 +7,9 @@ from torch.nn.functional import layer_norm
 
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+    """
+    LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False
+    """
 
     def __init__(self, ndim: int, bias: bool):
         super().__init__()
@@ -16,10 +18,12 @@ class LayerNorm(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
 
-        return layer_norm(
+        x = layer_norm(
             input=x,
             normalized_shape=self.weight.shape,
             weight=self.weight,
             bias=self.bias,
             eps=1e-5
         )
+
+        return x

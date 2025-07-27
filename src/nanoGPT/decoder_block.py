@@ -7,7 +7,7 @@ from nanoGPT.layer_norm import LayerNorm
 from nanoGPT.mlp import MLP
 
 
-class Block(Module):
+class DecoderBlock(Module):
 
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -17,6 +17,8 @@ class Block(Module):
         self.mlp = MLP(config)
 
     def forward(self, x: Tensor) -> Tensor:
+
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
+
         return x

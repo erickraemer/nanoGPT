@@ -7,7 +7,7 @@ import torch.nn
 from torch.nn import Module, ModuleDict, Embedding, Dropout, ModuleList, Linear, Parameter
 from torch.nn.functional import cross_entropy
 
-from nanoGPT.decoder import Block
+from nanoGPT.decoder_block import DecoderBlock
 from nanoGPT.gpt_config import GPTConfig
 from nanoGPT.layer_norm import LayerNorm
 
@@ -33,7 +33,7 @@ class GPT(Module):
             wte = Embedding(config.vocab_size, config.n_embd),
             wpe = Embedding(config.block_size, config.n_embd),
             drop = Dropout(config.dropout),
-            h = ModuleList([Block(config) for _ in range(config.n_layer)]),
+            h = ModuleList([DecoderBlock(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = Linear(config.n_embd, config.vocab_size, bias=False)

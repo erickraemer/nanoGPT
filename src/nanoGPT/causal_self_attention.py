@@ -1,13 +1,15 @@
 import math
 from collections.abc import Callable
+from typing import Final
 
 import torch
 from torch import Tensor
 from torch.nn import Module, Linear, Dropout
-from torch.nn.functional import softmax
+from torch.nn.functional import softmax, scaled_dot_product_attention
 
 from nanoGPT.gpt_config import GPTConfig
 
+AttentionFunction: type = Final[Callable[[Tensor, Tensor, Tensor], Tensor]]
 
 class CausalSelfAttention(Module):
 
@@ -27,7 +29,7 @@ class CausalSelfAttention(Module):
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.functional, 'scaled_dot_product_attention')
-        self._attention_func = self._get_attention_func()
+        self._attention_func: AttentionFunction = self.flash_attention if self.flash else self.manual_attention
 
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
@@ -38,18 +40,12 @@ class CausalSelfAttention(Module):
                 .view(1, 1, config.block_size, config.block_size)
             )
 
-    def _get_attention_func(self) -> Callable[[Tensor, Tensor, Tensor], Tensor]:
-        if self.flash:
-            return self._flash_attention
-
-        return self._manual_attention
-
-    def _flash_attention(self, query: Tensor, key: Tensor, value: Tensor):
+    def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
         Efficient attention using Flash Attention CUDA kernels.
         """
 
-        att = torch.functional.scaled_dot_product_attention(
+        att = scaled_dot_product_attention(
             query,
             key,
             value,
@@ -60,7 +56,7 @@ class CausalSelfAttention(Module):
 
         return att
 
-    def _manual_attention(self, query: Tensor, key: Tensor, value: Tensor):
+    def manual_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
         manual implementation of attention
         """

@@ -27,7 +27,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from nanoGPT.decoder import Block
+from nanoGPT.decoder_block import DecoderBlock
 from nanoGPT.gpt_config import GPTConfig
 from nanoGPT.gpt import GPT
 
@@ -54,7 +54,7 @@ block_size = 1024
 n_layer = 12
 n_head = 12
 n_active_heads = 6
-activate_heads_after_n_epochs = 1000
+activate_heads_after_n_epochs = 10
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
@@ -75,7 +75,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = False # use PyTorch 2.0 to compile the model to be faster
+compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -275,7 +275,7 @@ while True:
 
     if iter_num == activate_heads_after_n_epochs:
         print(f"activating all {n_head} heads after {activate_heads_after_n_epochs} epochs")
-        dec: Block
+        dec: DecoderBlock
         for dec in raw_model.transformer["h"]:
             dec.attn.n_active_heads = dec.attn.n_head # activate all heads after n epochs
 
