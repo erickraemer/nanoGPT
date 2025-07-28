@@ -24,7 +24,7 @@ class CausalSelfAttention(Module):
         self.attn_dropout = Dropout(config.dropout)
         self.resid_dropout = Dropout(config.dropout)
         self.n_head = config.n_head
-        self.n_active_heads = config.n_head
+        self.n_active_heads = config.n_active_heads
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
