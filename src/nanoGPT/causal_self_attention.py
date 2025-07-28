@@ -28,7 +28,7 @@ class CausalSelfAttention(Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.functional, 'scaled_dot_product_attention')
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         self._attention_func: AttentionFunction = self.flash_attention if self.flash else self.manual_attention
 
         if not self.flash:
