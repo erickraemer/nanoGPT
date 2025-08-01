@@ -1,3 +1,4 @@
+import logging
 import math
 from collections.abc import Callable
 from typing import Final
@@ -10,6 +11,8 @@ from torch.nn.functional import softmax, scaled_dot_product_attention
 from nanoGPT.gpt_config import GPTConfig
 
 AttentionFunction: type = Final[Callable[[Tensor, Tensor, Tensor], Tensor]]
+
+Logger = logging.getLogger(__file__)
 
 class CausalSelfAttention(Module):
 
@@ -72,23 +75,32 @@ class CausalSelfAttention(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        Logger.debug("x.shape: %s, B: %s, T: %s, C: %s", x.shape, B, T, C)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         x: Tensor = self.c_attn(x) # (B, T, 3C)
         q, k, v = torch.split(x, self.n_embd, dim=2) # ((B, T, C), (B, T, C), (B, T, C))
 
         # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        hs: Final[int] = C // self.n_head
+        k = k.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+
+        Logger.debug("q.shape: %s, k.shape: %s, v.shape: %s", q.shape, k.shape, v.shape)
 
         # consider only the active heads
         k = k[:, :self.n_active_heads, :, :]
         q = q[:, :self.n_active_heads, :, :]
         v = v[:, :self.n_active_heads, :, :]
 
+        Logger.debug("active_heads: %s, q.shape: %s, k.shape: %s, v.shape: %s", self.n_active_heads, q.shape, k.shape, v.shape)
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        y = self._attention_func(q, k, v)
+        y = torch.zeros((B, self.n_head, T, hs), device=x.device, dtype=x.dtype) # (B, nh, T, hs)
+        y[:, :self.n_active_heads, :, :] = self._attention_func(q, k, v)
+
+        Logger.debug("y.shape: %s", y.shape)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
