@@ -262,7 +262,6 @@ if wandb_log and master_process:
     wandb.define_metric(name="iterations", step_metric="iter")
 
 # training loop
-X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -274,7 +273,7 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    if iter_num == activate_heads_after_n_epochs:
+    if iter_num == activate_heads_after_n_epochs and n_active_heads != n_head:
         print(f"activating all {n_head} heads after {activate_heads_after_n_epochs} epochs")
         dec: DecoderBlock
         for dec in raw_model.transformer["h"]:
