@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module, Linear, Dropout
 from torch.nn.functional import softmax, scaled_dot_product_attention
+import torch.nn.functional as F
 
 from nanoGPT.gpt_config import GPTConfig
 
@@ -21,20 +22,24 @@ class CausalSelfAttention(Module):
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.c_attn = Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+
         # output projection
         self.c_proj = Linear(config.n_embd, config.n_embd, bias=config.bias)
+
         # regularization
         self.attn_dropout = Dropout(config.dropout)
         self.resid_dropout = Dropout(config.dropout)
-        self.n_head = config.n_head
-        self.n_active_heads = config.n_active_heads
-        self.n_embd = config.n_embd
-        self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        self._attention_func: AttentionFunction = self.flash_attention if self.flash else self.manual_attention
+        self.config: Final[GPTConfig] = config
 
-        if not self.flash:
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+        self.flash: Final[bool] = self._check_flash_support(config)
+        self._attention_func: Final[AttentionFunction] = self._get_attention_func()
+
+
+    def _check_flash_support(self, config: GPTConfig) -> bool:
+        flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+
+        if not flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer(
@@ -42,6 +47,27 @@ class CausalSelfAttention(Module):
                 torch.tril(torch.ones(config.block_size, config.block_size))
                 .view(1, 1, config.block_size, config.block_size)
             )
+
+        return flash
+
+    def _get_attention_func(self) -> AttentionFunction:
+        """
+        Returns the attention function based on whether flash attention is supported.
+        """
+        return self.flash_attention if self.flash else self.manual_attention
+
+    def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        # consider only the active heads
+        k = k[:, :self.config.n_active_heads, :, :]
+        q = q[:, :self.config.n_active_heads, :, :]
+        v = v[:, :self.config.n_active_heads, :, :]
+
+        att = self._attention_func(q, k, v)
+
+        # pad to full number of heads
+        att = F.pad(att, (0, 0, 0, 0, 0, self.config.n_head - self.config.n_active_heads), mode='constant', value=0)
+
+        return att
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
@@ -53,7 +79,7 @@ class CausalSelfAttention(Module):
             key,
             value,
             attn_mask=None,
-            dropout_p=self.dropout if self.training else 0,
+            dropout_p=self.config.dropout if self.training else 0,
             is_causal=True
         )
 
@@ -75,32 +101,19 @@ class CausalSelfAttention(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        Logger.debug("x.shape: %s, B: %s, T: %s, C: %s", x.shape, B, T, C)
+        hs: Final[int] = C // self.config.n_head
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         x: Tensor = self.c_attn(x) # (B, T, 3C)
-        q, k, v = torch.split(x, self.n_embd, dim=2) # ((B, T, C), (B, T, C), (B, T, C))
+        q, k, v = torch.split(x, self.config.n_embd, dim=2) # ((B, T, C), (B, T, C), (B, T, C))
 
         # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        hs: Final[int] = C // self.n_head
-        k = k.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
-
-        Logger.debug("q.shape: %s, k.shape: %s, v.shape: %s", q.shape, k.shape, v.shape)
-
-        # consider only the active heads
-        k = k[:, :self.n_active_heads, :, :]
-        q = q[:, :self.n_active_heads, :, :]
-        v = v[:, :self.n_active_heads, :, :]
-
-        Logger.debug("active_heads: %s, q.shape: %s, k.shape: %s, v.shape: %s", self.n_active_heads, q.shape, k.shape, v.shape)
+        k = k.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        y = torch.zeros((B, self.n_head, T, hs), device=x.device, dtype=x.dtype) # (B, nh, T, hs)
-        y[:, :self.n_active_heads, :, :] = self._attention_func(q, k, v)
-
-        Logger.debug("y.shape: %s", y.shape)
+        y = self.dynamic_head_attention(q, k, v)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
