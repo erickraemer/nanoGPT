@@ -6,12 +6,11 @@ from typing import Final
 import torch
 from torch import Tensor
 from torch.nn import Module, Linear, Dropout
-from torch.nn.functional import softmax, scaled_dot_product_attention
 import torch.nn.functional as F
 
 from nanoGPT.gpt_config import GPTConfig
 
-AttentionFunction: type = Final[Callable[[Tensor, Tensor, Tensor], Tensor]]
+AttentionFunction: type = Callable[[Tensor, Tensor, Tensor], Tensor]
 
 Logger = logging.getLogger(__file__)
 
@@ -20,6 +19,8 @@ class CausalSelfAttention(Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
         assert config.n_embd % config.n_head == 0
+        assert config.n_active_heads <= config.n_head
+
         # key, query, value projections for all heads, but in a batch
         self.c_attn = Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
 
@@ -40,7 +41,7 @@ class CausalSelfAttention(Module):
         flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
         if not flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            Logger.warning("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # causal mask to ensure that attention is only applied to the left in the input sequence
             self.register_buffer(
                 "bias",
@@ -57,6 +58,10 @@ class CausalSelfAttention(Module):
         return self.flash_attention if self.flash else self.manual_attention
 
     def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        """
+        Dynamic head attention that considers only the active heads.
+        """
+
         # consider only the active heads
         k = k[:, :self.config.n_active_heads, :, :]
         q = q[:, :self.config.n_active_heads, :, :]
@@ -74,7 +79,7 @@ class CausalSelfAttention(Module):
         Efficient attention using Flash Attention CUDA kernels.
         """
 
-        att = scaled_dot_product_attention(
+        att = F.scaled_dot_product_attention(
             query,
             key,
             value,
@@ -93,7 +98,7 @@ class CausalSelfAttention(Module):
         T: int = query.shape[2]
         att = (query @ key.transpose(-2, -1)) * (1.0 / math.sqrt(key.size(-1)))
         att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-        att = softmax(att, dim=-1)
+        att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         att = att @ value
 

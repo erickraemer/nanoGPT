@@ -15,7 +15,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123
 $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
-
+import logging
 import os
 import time
 import math
@@ -266,7 +266,12 @@ X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
+assert all(dec.attn.config is gptconf for dec in raw_model.transformer["h"]) # ensure all decoder blocks have the same config
 running_mfu = -1.0
+
+# import logging
+# logging.basicConfig(level=logging.DEBUG)
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -274,12 +279,9 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    if iter_num == activate_heads_after_n_epochs and n_active_heads != n_head:
+    if iter_num == activate_heads_after_n_epochs:
+        gptconf.n_active_heads = gptconf.n_head # activate all heads
         print(f"activating all {n_head} heads after {activate_heads_after_n_epochs} epochs")
-        dec: DecoderBlock
-        for dec in raw_model.transformer["h"]:
-            dec.attn.n_active_heads = dec.attn.n_head # activate all heads after n epochs
-
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -292,7 +294,7 @@ while True:
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-                "n_active_heads": raw_model.transformer["h"][0].attn.n_active_heads,
+                "n_active_heads": gptconf.n_active_heads,
             })
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
