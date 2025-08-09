@@ -30,6 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from nanoGPT.decoder_block import DecoderBlock
 from nanoGPT.gpt_config import GPTConfig
 from nanoGPT.gpt import GPT
+from nanoGPT.util import get_gpus, NvidiaGPU
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -73,7 +74,12 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+gpus = get_gpus()
+print(f"GPU's:")
+print("\n".join(f"{gpu} | total-util: {gpu.rank()} %" for gpu in gpus))
+least_busy_gpu: NvidiaGPU = min(gpus)
+print(f"Using {least_busy_gpu.name} ({least_busy_gpu.id})\n")
+device = f'cuda:{least_busy_gpu.id}' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
@@ -102,6 +108,9 @@ else:
     master_process = True
     seed_offset = 0
     ddp_world_size = 1
+
+print(f"DDP: {ddp}")
+
 tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
