@@ -158,7 +158,7 @@ class GPT(Module):
 
         return model
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    def get_adamw_optimizer(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -181,6 +181,20 @@ class GPT(Module):
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
         print(f"using fused AdamW: {use_fused}")
+
+        return optimizer
+
+    def get_sgd_optimizer(self, learning_rate):
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        num_params = sum(p.numel() for p in param_dict.values())
+        print(f"num parameter tensors: {len(param_dict)}, with {num_params:,} parameters")
+        optimizer = torch.optim.SGD(param_dict.values(), lr=learning_rate)
+        print(f"using SGD")
 
         return optimizer
 
