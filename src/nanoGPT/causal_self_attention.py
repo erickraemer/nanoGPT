@@ -14,6 +14,7 @@ AttentionFunction: type = Callable[[Tensor, Tensor, Tensor], Tensor]
 
 Logger = logging.getLogger(__file__)
 
+
 class CausalSelfAttention(Module):
 
     def __init__(self, config: GPTConfig):
@@ -30,34 +31,37 @@ class CausalSelfAttention(Module):
         self.resid_dropout = Dropout(config.dropout)
         self.config: Final[GPTConfig] = config
 
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash: Final[bool] = self._check_flash_support(config)
+        # choose whether to use flash attention or manual attention
         self._attention_func: Final[AttentionFunction] = self._get_attention_func()
+        self._create_causal_mask(config)
 
+    def _create_causal_mask(self, config: GPTConfig):
+        """
+        Create causal mask to ensure that attention is only applied to the left in
+        the input sequence when using manual attention.
+        """
 
-    def _check_flash_support(self, config: GPTConfig) -> bool:
-        flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if config.flash:
+            return
 
-        if not flash:
-            Logger.warning("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer(
-                "bias",
-                torch.tril(torch.ones(config.block_size, config.block_size))
-                .view(1, 1, config.block_size, config.block_size)
-            )
-
-        return flash
+        self.register_buffer(
+            "bias",
+            torch.tril(torch.ones(config.block_size, config.block_size))
+            .view(1, 1, config.block_size, config.block_size)
+        )
 
     def _get_attention_func(self) -> AttentionFunction:
         """
         Returns the attention function based on whether flash attention is supported.
         """
-        return self.flash_attention if self.flash else self.manual_attention
+        return self.flash_attention if self.config.flash else self.manual_attention
 
     def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         """
         Dynamic head attention that considers only the active heads.
+        :param q: Query tensor of shape (B, n_head, T, hs)
+        :param k: Key tensor of shape (B, n_head, T, hs)
+        :param v: Value tensor of shape (B, n_head, T, hs)
         """
 
         # consider only the active heads
@@ -103,21 +107,21 @@ class CausalSelfAttention(Module):
         return att
 
     def forward(self, x: Tensor) -> Tensor:
-        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
         hs: Final[int] = C // self.config.n_head
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        x: Tensor = self.c_attn(x) # (B, T, 3C)
-        q, k, v = torch.split(x, self.config.n_embd, dim=2) # ((B, T, C), (B, T, C), (B, T, C))
+        x: Tensor = self.c_attn(x)  # (B, T, 3C)
+        q, k, v = torch.split(x, self.config.n_embd, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
 
         # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        k = k.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.config.n_head, hs).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        q = q.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         y = self.dynamic_head_attention(q, k, v)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))

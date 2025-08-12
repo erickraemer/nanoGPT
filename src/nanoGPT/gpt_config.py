@@ -1,4 +1,9 @@
+import logging
 from dataclasses import dataclass
+
+import torch
+
+Logger = logging.getLogger(__file__)
 
 
 @dataclass
@@ -12,6 +17,8 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
+    flash: bool = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
     def __setattr__(self, key, value):
         assert key != 'n_active_heads' or value <= self.n_head
@@ -20,3 +27,6 @@ class GPTConfig:
     def __post_init__(self):
         assert self.n_embd % self.n_head == 0
         assert self.n_active_heads <= self.n_head
+
+        if not self.flash:
+            Logger.warning("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
