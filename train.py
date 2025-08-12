@@ -15,22 +15,20 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123
 $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
-import logging
-import os
-import time
 import math
+import os
 import pickle
+import time
 from contextlib import nullcontext
 
 import numpy as np
 import torch
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from torch.nn.parallel import DistributedDataParallel as DDP
 
-from nanoGPT.decoder_block import DecoderBlock
-from nanoGPT.gpt_config import GPTConfig
 from nanoGPT.gpt import GPT
-from nanoGPT.util import get_gpus, NvidiaGPU
+from nanoGPT.gpt_config import GPTConfig
+from nanoGPT.util import get_gpus, NvidiaGPU, print_gpus
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -75,9 +73,8 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 gpus = get_gpus()
-print(f"GPU's:")
-print("\n".join(f"{gpu} | total-util: {gpu.rank()} %" for gpu in gpus))
-least_busy_gpu: NvidiaGPU = min(gpus)
+print_gpus(gpus)
+least_busy_gpu: NvidiaGPU = min(gpus, key=lambda gpu: gpu.rank())
 print(f"Using {least_busy_gpu.name} ({least_busy_gpu.id})\n")
 device = f'cuda:{least_busy_gpu.id}' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
