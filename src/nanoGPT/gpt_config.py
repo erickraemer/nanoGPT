@@ -16,3 +16,7 @@ class GPTConfig:
     def __setattr__(self, key, value):
         assert key != 'n_active_heads' or value <= self.n_head
         super().__setattr__(key, value)
+
+    def __post_init__(self):
+        assert self.n_embd % self.n_head == 0
+        assert self.n_active_heads <= self.n_head

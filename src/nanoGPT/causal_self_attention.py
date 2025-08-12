@@ -18,8 +18,6 @@ class CausalSelfAttention(Module):
 
     def __init__(self, config: GPTConfig):
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        assert config.n_active_heads <= config.n_head
 
         # key, query, value projections for all heads, but in a batch
         self.c_attn = Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
