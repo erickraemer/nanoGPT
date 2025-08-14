@@ -23,20 +23,18 @@ def _init_weights(module):
 
 class GPT(Module):
 
-    def __init__(self, config):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
-        assert config.vocab_size is not None
-        assert config.block_size is not None
-        self.config = config
+        self.config: GPTConfig = cfg
 
         self.transformer = ModuleDict(dict(
-            wte = Embedding(config.vocab_size, config.n_embd),
-            wpe = Embedding(config.block_size, config.n_embd),
-            drop = Dropout(config.dropout),
-            h = ModuleList([DecoderBlock(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            wte = Embedding(cfg.model.vocab_size, cfg.model.embedding_size),
+            wpe = Embedding(cfg.data.block_size, cfg.model.embedding_size),
+            drop = Dropout(cfg.model.dropout_rate),
+            h = ModuleList([DecoderBlock(cfg) for _ in range(cfg.model.layer)]),
+            ln_f = LayerNorm(cfg.model.embedding_size, bias=cfg.model.bias),
         ))
-        self.lm_head = Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head = Linear(cfg.model.embedding_size, cfg.model.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -48,7 +46,7 @@ class GPT(Module):
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * cfg.model.layer))
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -68,7 +66,7 @@ class GPT(Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        assert t <= self.config.data.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.data.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
@@ -158,7 +156,7 @@ class GPT(Module):
 
         return model
 
-    def get_adamw_optimizer(self, weight_decay, learning_rate, betas, device_type):
+    def get_adamw_optimizer(self, weight_decay: float, learning_rate: float, betas, device_type: str):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -184,7 +182,7 @@ class GPT(Module):
 
         return optimizer
 
-    def get_sgd_optimizer(self, learning_rate):
+    def get_sgd_optimizer(self, learning_rate: float, device_type: str):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -193,8 +191,10 @@ class GPT(Module):
         # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
         num_params = sum(p.numel() for p in param_dict.values())
         print(f"num parameter tensors: {len(param_dict)}, with {num_params:,} parameters")
-        optimizer = torch.optim.SGD(param_dict.values(), lr=learning_rate)
-        print(f"using SGD")
+        fused_available = 'fused' in inspect.signature(torch.optim.SGD).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        optimizer = torch.optim.SGD(param_dict.values(), lr=learning_rate, fused=use_fused)
+        print(f"using fused SGD: {use_fused}")
 
         return optimizer
 
@@ -204,7 +204,7 @@ class GPT(Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
+        L, H, Q, T = cfg.model.layer, cfg.model.heads, cfg.model.embedding_size//cfg.model.heads, cfg.data.block_size
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -223,7 +223,7 @@ class GPT(Module):
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = idx if idx.size(1) <= self.config.data.block_size else idx[:, -self.config.data.block_size:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
             # pluck the logits at the final step and scale by desired temperature

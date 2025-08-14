@@ -1,0 +1,61 @@
+
+wandb:
+  project_name: "nanoGPT"
+  run_name: "gpt2-load"
+
+logging:
+  wandb: False
+  interval: 10
+
+eval:
+  only: False
+  interval: 1000
+  iters: 200
+
+checkpoint:
+  out_dir: "out"
+  interval: 50
+
+data:
+  dataset: "openwebtext"
+  gradient_accumulation_steps: 5
+  batch_size: 8
+  block_size: 512
+
+model:
+  checkpoint: "/home/user/Documents/nanoGPT/out/gpt2/ckpt_100iter.pt"
+  layer: 4
+  heads: 4
+  active_heads: 2
+  head_activation_step: 600_000
+  embedding_size: 512
+  vocab_size: 50304
+  dropout_rate: 0.0
+  bias: False
+  compile: True
+  dtype: "bfloat16"
+
+adamw:
+  beta1: 0.9
+  beta2: 0.95
+
+optimizer:
+  name: "adamw" # adamw or sgd
+  learning_rate: 6e-4
+  max_iters: 600_000
+  weight_decay: 1e-1
+  grad_clip: 1.0
+  fused: True
+
+lr_scheduler:
+  decay: True
+  warmup_iters: 2000
+  decay_iters: 600_000
+  min_lr: 6e-5
+
+ddp:
+  backend: "nccl"
+
+
+
+

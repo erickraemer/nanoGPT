@@ -4,9 +4,9 @@ from collections.abc import Callable
 from typing import Final
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import Module, Linear, Dropout
-import torch.nn.functional as F
 
 from nanoGPT.gpt_config import GPTConfig
 
@@ -17,62 +17,60 @@ Logger = logging.getLogger(__file__)
 
 class CausalSelfAttention(Module):
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
 
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_attn = Linear(cfg.model.embedding_size, 3 * cfg.model.embedding_size, bias=cfg.model.bias)
 
         # output projection
-        self.c_proj = Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj = Linear(cfg.model.embedding_size, cfg.model.embedding_size, bias=cfg.model.bias)
 
         # regularization
-        self.attn_dropout = Dropout(config.dropout)
-        self.resid_dropout = Dropout(config.dropout)
-        self.config: Final[GPTConfig] = config
+        self.attn_dropout = Dropout(cfg.model.dropout_rate)
+        self.resid_dropout = Dropout(cfg.model.dropout_rate)
+        self.cfg: Final[GPTConfig] = cfg
 
         # choose whether to use flash attention or manual attention
         self._attention_func: Final[AttentionFunction] = self._get_attention_func()
-        self._create_causal_mask(config)
+        self._create_causal_mask()
 
-    def _create_causal_mask(self, config: GPTConfig):
+    def _create_causal_mask(self):
         """
         Create causal mask to ensure that attention is only applied to the left in
         the input sequence when using manual attention.
         """
 
-        if config.flash:
+        if self.cfg.flash:
             return
 
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones(config.block_size, config.block_size))
-            .view(1, 1, config.block_size, config.block_size)
+            torch.tril(torch.ones(self.cfg.data.block_size, self.cfg.data.block_size))
+            .view(1, 1, self.cfg.data.block_size, self.cfg.data.block_size)
         )
 
     def _get_attention_func(self) -> AttentionFunction:
         """
         Returns the attention function based on whether flash attention is supported.
         """
-        return self.flash_attention if self.config.flash else self.manual_attention
+        return self.flash_attention if self.cfg.flash else self.manual_attention
 
     def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         """
         Dynamic head attention that considers only the active heads.
-        :param q: Query tensor of shape (B, n_head, T, hs)
-        :param k: Key tensor of shape (B, n_head, T, hs)
-        :param v: Value tensor of shape (B, n_head, T, hs)
         """
 
         # consider only the active heads
-        k = k[:, :self.config.n_active_heads, :, :]
-        q = q[:, :self.config.n_active_heads, :, :]
-        v = v[:, :self.config.n_active_heads, :, :]
+        k = k[:, :self.cfg.model.active_heads, :, :]
+        q = q[:, :self.cfg.model.active_heads, :, :]
+        v = v[:, :self.cfg.model.active_heads, :, :]
 
         att = self._attention_func(q, k, v)
 
         # pad to full number of heads
-        att = F.pad(att, (0, 0, 0, 0, 0, self.config.n_head - self.config.n_active_heads), mode='constant', value=0)
+        att = F.pad(att, (0, 0, 0, 0, 0, self.cfg.model.heads - self.cfg.model.active_heads), mode='constant',
+                    value=0)
 
         return att
 
@@ -86,7 +84,7 @@ class CausalSelfAttention(Module):
             key,
             value,
             attn_mask=None,
-            dropout_p=self.config.dropout if self.training else 0,
+            dropout_p=self.cfg.model.dropout_rate if self.training else 0,
             is_causal=True
         )
 
@@ -108,16 +106,16 @@ class CausalSelfAttention(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
-        hs: Final[int] = C // self.config.n_head
+        hs: Final[int] = C // self.cfg.model.heads
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         x: Tensor = self.c_attn(x)  # (B, T, 3C)
-        q, k, v = torch.split(x, self.config.n_embd, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
+        q, k, v = torch.split(x, self.cfg.model.embedding_size, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
 
         # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        k = k.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.config.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
+        q = q.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         y = self.dynamic_head_attention(q, k, v)

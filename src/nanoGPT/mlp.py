@@ -6,12 +6,12 @@ from nanoGPT.gpt_config import GPTConfig
 
 class MLP(Module):
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
-        self.c_fc    = Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_fc    = Linear(cfg.model.embedding_size, 4 * cfg.model.embedding_size, bias=cfg.model.bias)
         self.gelu    = GELU()
-        self.c_proj  = Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
-        self.dropout = Dropout(config.dropout)
+        self.c_proj  = Linear(4 * cfg.model.embedding_size, cfg.model.embedding_size, bias=cfg.model.bias)
+        self.dropout = Dropout(cfg.model.dropout_rate)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.c_fc(x)

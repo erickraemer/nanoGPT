@@ -7,8 +7,12 @@ __pycache__/
 *.pkl
 *.pt
 *.pyc
+*.txt
+*.xml
+*.xz
 input.txt
 env/
 venv/
 *.egg-info/
 wandb
+/out

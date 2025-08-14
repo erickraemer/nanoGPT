@@ -9,12 +9,12 @@ from nanoGPT.mlp import MLP
 
 class DecoderBlock(Module):
 
-    def __init__(self, config: GPTConfig):
+    def __init__(self, cfg: GPTConfig):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
+        self.ln_1 = LayerNorm(cfg.model.embedding_size, bias=cfg.model.bias)
+        self.attn = CausalSelfAttention(cfg)
+        self.ln_2 = LayerNorm(cfg.model.embedding_size, bias=cfg.model.bias)
+        self.mlp = MLP(cfg)
 
     def forward(self, x: Tensor) -> Tensor:
 
