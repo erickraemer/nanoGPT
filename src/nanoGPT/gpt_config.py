@@ -98,9 +98,9 @@ class GPTConfig:
 
     @classmethod
     def load(cls, yaml_file: str) -> Self:
-        config = OmegaConf.load(yaml_file)
+        config: GPTConfig = OmegaConf.load(yaml_file)
         config.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        config.checkpoint_folder = Path(config.checkpoint.out_dir) / config.wandb.run_name
+        config.checkpoint_folder = Path(config.checkpointing.out_dir) / config.wandb.run_name
         config.checkpoint_folder.mkdir(exist_ok=True, parents=True)
         shutil.copy(yaml_file, config.checkpoint_folder)
 

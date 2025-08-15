@@ -75,7 +75,7 @@ tokens_per_iter = cfg.data.gradient_accumulation_steps * ddp_world_size * cfg.da
 print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
-    os.makedirs(cfg.checkpoint.out_dir, exist_ok=True)
+    os.makedirs(cfg.checkpointing.out_dir, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -251,7 +251,7 @@ while True:
                 "n_active_heads": cfg.model.active_heads,
             })
 
-    if iter_num % cfg.checkpoint.interval == 0 and iter_num > start_iter and master_process:
+    if iter_num % cfg.checkpointing.interval == 0 and iter_num > start_iter and master_process:
         checkpoint = {
             'model': raw_model.state_dict(),
             'optimizer': optimizer.state_dict(),
