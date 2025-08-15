@@ -24,7 +24,7 @@ class EvalConfig:
     iters: int = 200
 
 @dataclass
-class CheckpointConfig:
+class CheckpointingConfig:
     out_dir: str = "out"
     interval: int = 10_000
 
@@ -82,7 +82,7 @@ class GPTConfig:
     wandb: WandbConfig
     logging: LoggingConfig
     eval: EvalConfig
-    checkpoint: CheckpointConfig
+    checkpointing: CheckpointingConfig
     data: DataConfig
     model: ModelConfig
     adamw: AdamWConfig
