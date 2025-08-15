@@ -20,7 +20,6 @@ import os
 import pickle
 import sys
 import time
-import warnings
 from contextlib import nullcontext
 
 import numpy as np
@@ -29,9 +28,9 @@ from omegaconf import OmegaConf
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from nanoGPT import util
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
-from nanoGPT import util
 
 if len(sys.argv) < 1:
     raise RuntimeError("No config.yaml provided")
@@ -161,9 +160,9 @@ scaler = torch.amp.GradScaler(enabled=(cfg.model.dtype == 'float16'))
 
 # optimizer
 if cfg.optimizer.name == "adamw":
-    optimizer = model.get_adamw_optimizer(cfg.optimizer.weight_decay, cfg.optimizer.learning_rate, (cfg.adamw.beta1, cfg.adamw.beta2), device_type)
+    optimizer = model.get_adamw_optimizer(cfg, device_type)
 elif cfg.optimizer.name == "sgd":
-    optimizer = model.get_sgd_optimizer(cfg.optimizer.learning_rate)
+    optimizer = model.get_sgd_optimizer(cfg, device_type)
 else:
     raise ValueError(f"fInvalid optimizer name {cfg.optimizer.name}")
 
@@ -251,6 +250,7 @@ while True:
                 "mfu": running_mfu*100, # convert to percentage
                 "n_active_heads": cfg.model.active_heads,
             })
+
     if iter_num % cfg.checkpoint.interval == 0 and iter_num > start_iter and master_process:
         checkpoint = {
             'model': raw_model.state_dict(),

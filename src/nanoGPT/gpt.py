@@ -156,7 +156,7 @@ class GPT(Module):
 
         return model
 
-    def get_adamw_optimizer(self, weight_decay: float, learning_rate: float, betas, device_type: str):
+    def get_adamw_optimizer(self, cfg: GPTConfig, device_type: str):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -166,7 +166,7 @@ class GPT(Module):
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
-            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': decay_params, 'weight_decay': cfg.optimizer.weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
@@ -177,12 +177,17 @@ class GPT(Module):
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        optimizer = torch.optim.AdamW(
+            optim_groups,
+            lr=cfg.optimizer.learning_rate,
+            betas=(cfg.adamw.beta1, cfg.adamw.beta2),
+            **extra_args
+        )
         print(f"using fused AdamW: {use_fused}")
 
         return optimizer
 
-    def get_sgd_optimizer(self, learning_rate: float, device_type: str):
+    def get_sgd_optimizer(self, cfg: GPTConfig, device_type: str):
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -193,7 +198,12 @@ class GPT(Module):
         print(f"num parameter tensors: {len(param_dict)}, with {num_params:,} parameters")
         fused_available = 'fused' in inspect.signature(torch.optim.SGD).parameters
         use_fused = fused_available and device_type == 'cuda'
-        optimizer = torch.optim.SGD(param_dict.values(), lr=learning_rate, fused=use_fused)
+        optimizer = torch.optim.SGD(
+            param_dict.values(),
+            lr=cfg.optimizer.learning_rate,
+            weight_decay=cfg.optimizer.weight_decay,
+            fused=use_fused
+        )
         print(f"using fused SGD: {use_fused}")
 
         return optimizer

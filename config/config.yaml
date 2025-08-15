@@ -12,7 +12,7 @@ eval:
   interval: 1000
   iters: 200
 
-checkpoint:
+checkpointing:
   out_dir: "out"
   interval: 50
 
@@ -45,7 +45,6 @@ optimizer:
   max_iters: 600_000
   weight_decay: 1e-1
   grad_clip: 1.0
-  fused: True
 
 lr_scheduler:
   decay: True

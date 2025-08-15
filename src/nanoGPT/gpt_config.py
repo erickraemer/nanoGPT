@@ -65,7 +65,6 @@ class OptimizerConfig:
     max_iters: int = 600_000
     weight_decay: float = 1e-1
     grad_clip: float = 1.0
-    fused: bool = True
 
 @dataclass
 class LRSchedulerConfig:
