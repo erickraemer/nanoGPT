@@ -32,7 +32,7 @@ from nanoGPT import util
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
 
-if len(sys.argv) < 1:
+if len(sys.argv) < 2:
     raise RuntimeError("No config.yaml provided")
 
 arg = sys.argv[1]
