@@ -1,4 +1,3 @@
-import logging
 import math
 from collections.abc import Callable
 from typing import Final
@@ -11,9 +10,6 @@ from torch.nn import Module, Linear, Dropout
 from nanoGPT.gpt_config import GPTConfig
 
 AttentionFunction: type = Callable[[Tensor, Tensor, Tensor], Tensor]
-
-Logger = logging.getLogger(__file__)
-
 
 class CausalSelfAttention(Module):
 
@@ -56,23 +52,6 @@ class CausalSelfAttention(Module):
         """
         return self.flash_attention if self.cfg.flash else self.manual_attention
 
-    def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-        """
-        Dynamic head attention that considers only the active heads.
-        """
-
-        # consider only the active heads
-        k = k[:, :self.cfg.model.active_heads, :, :]
-        q = q[:, :self.cfg.model.active_heads, :, :]
-        v = v[:, :self.cfg.model.active_heads, :, :]
-
-        att = self._attention_func(q, k, v)
-
-        # pad to full number of heads
-        att = F.pad(att, (0, 0, 0, 0, 0, self.cfg.model.heads - self.cfg.model.active_heads), mode='constant',
-                    value=0)
-
-        return att
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
@@ -107,20 +86,27 @@ class CausalSelfAttention(Module):
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
         hs: Final[int] = C // self.cfg.model.heads
+        ah: Final[int] = self.cfg.model.active_heads
+        nh: Final[int] = self.cfg.model.heads
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        x: Tensor = self.c_attn(x)  # (B, T, 3C)
-        q, k, v = torch.split(x, self.cfg.model.embedding_size, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
+        C_hat: Final[int] = ah * hs
+        wa = self.c_attn.weight.reshape(3, nh, hs, C)[:, :ah, :, :].reshape(3*C_hat, C)
+        ba = None if self.c_attn.bias is None else self.c_attn.bias.reshape(3, nh, hs)[:, :ah, :].reshape(3*C_hat)
+        x: Tensor = F.linear(x, wa, ba)
+        q, k, v = torch.split(x, C_hat, dim=2)  # ((B, T, C_hat), (B, T, C_hat), (B, T, C_hat))
 
-        # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        k = k.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.cfg.model.heads, hs).transpose(1, 2)  # (B, nh, T, hs)
+        # (B, T, C_hat) -> (B, T, ah, hs)
+        k = k.view(B, T, ah, hs).transpose(1, 2)  # (B, ah, T, hs)
+        q = q.view(B, T, ah, hs).transpose(1, 2)  # (B, ah, T, hs)
+        v = v.view(B, T, ah, hs).transpose(1, 2)  # (B, ah, T, hs)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        y = self.dynamic_head_attention(q, k, v)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
+        # causal self-attention; Self-attend: (B, ah, T, hs) x (B, ah, hs, T) -> (B, ah, T, hs)
+        y = self._attention_func(q, k, v)
+        y = y.transpose(1, 2).contiguous().view(B, T, C_hat)  # re-assemble all head outputs side by side
 
         # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        wp = self.c_proj.weight[:, :C_hat]
+        y = F.linear(y, wp, self.c_proj.bias)
+        y = self.resid_dropout(y)
         return y
