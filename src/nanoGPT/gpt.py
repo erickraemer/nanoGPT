@@ -1,5 +1,6 @@
 import inspect
 import math
+from typing import Iterator
 
 import torch
 from torch import softmax
@@ -50,6 +51,9 @@ class GPT(Module):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def get_decoder_blocks(self) -> Iterator[DecoderBlock]:
+        return iter(self.transformer["h"]) # noqa
 
     def get_num_params(self, non_embedding=True):
         """

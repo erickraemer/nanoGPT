@@ -29,6 +29,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from nanoGPT import util
+from nanoGPT.decoder_block import DecoderBlock
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
 
@@ -221,7 +222,7 @@ X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
-assert all(dec.attn.cfg is cfg for dec in raw_model.transformer["h"]) # ensure all decoder blocks have the same config
+assert all(dec.attn._cfg is cfg for dec in raw_model.transformer["h"]) # ensure all decoder blocks have the same config
 running_mfu = -1.0
 
 # import logging
@@ -234,8 +235,11 @@ while True:
         param_group['lr'] = lr
 
     if iter_num == cfg.model.head_activation_step:
-        cfg.model.active_heads = cfg.model.heads # activate all heads
         print(f"activating all {cfg.model.heads} heads after {cfg.model.head_activation_step} epochs")
+        cfg.model.active_heads = cfg.model.heads
+
+        for decoder_block in raw_model.get_decoder_blocks():
+            decoder_block.attn.set_active_heads(cfg.model.heads)
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % cfg.eval.interval == 0 and master_process:

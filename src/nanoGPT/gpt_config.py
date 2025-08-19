@@ -50,7 +50,7 @@ class ModelConfig:
     dtype: str = "bfloat16"
 
     def __setattr__(self, key, value):
-        assert key != self.head_activation_step.__name__ or value <= self.heads
+        assert key != self.active_heads.__name__ or value <= self.heads
         super().__setattr__(key, value)
 
 @dataclass
