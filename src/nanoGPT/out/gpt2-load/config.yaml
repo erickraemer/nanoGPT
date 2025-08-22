@@ -14,7 +14,7 @@ eval:
 
 checkpointing:
   out_dir: "out"
-  interval: 10_000
+  interval: 50
 
 data:
   dataset: "openwebtext"
@@ -26,16 +26,17 @@ model:
   checkpoint: ""
   layer: 4
   heads: 4
+  head_activation_step: 600_000
   embedding_size: 512
   vocab_size: 50304
   dropout_rate: 0.0
   bias: False
   compile: True
   dtype: "bfloat16"
-
-head_activation_schedule:
-# iteration, active heads
-  30: 2
+  head_activation_schedule:
+  # iteration, active heads
+    0: 4
+    10_000: -1
 
 adamw:
   beta1: 0.9

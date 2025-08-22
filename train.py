@@ -23,6 +23,7 @@ import time
 from contextlib import nullcontext
 
 import numpy as np
+import tabulate
 import torch
 from omegaconf import OmegaConf
 from torch.distributed import init_process_group, destroy_process_group
@@ -224,6 +225,7 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 assert all(dec.attn._cfg is cfg for dec in raw_model.transformer["h"]) # ensure all decoder blocks have the same config
 running_mfu = -1.0
+active_heads: int = cfg.model.heads
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -234,12 +236,14 @@ while True:
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    if iter_num == cfg.model.head_activation_step:
-        print(f"activating all {cfg.model.heads} heads after {cfg.model.head_activation_step} epochs")
-        cfg.model.active_heads = cfg.model.heads
+    # apply head activation schedule
+    if cfg.head_activation_schedule.get(iter_num, active_heads) != active_heads:
+        new_active_heads = cfg.head_activation_schedule[iter_num]
+        print(f"Changing active head configuration: {active_heads} -> {new_active_heads}")
 
         for decoder_block in raw_model.get_decoder_blocks():
-            decoder_block.attn.set_active_heads(cfg.model.heads)
+            decoder_block.attn.set_active_heads(new_active_heads)
+        active_heads = new_active_heads
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % cfg.eval.interval == 0 and master_process:
@@ -252,7 +256,7 @@ while True:
                 "val/loss": losses['val'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-                "n_active_heads": cfg.model.active_heads,
+                "n_active_heads": active_heads,
             })
 
     if iter_num % cfg.checkpointing.interval == 0 and iter_num > start_iter and master_process:

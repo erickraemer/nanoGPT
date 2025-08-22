@@ -20,7 +20,7 @@ class CausalSelfAttention(Module):
 
         # hyperparameter
         self._total_heads: int = cfg.model.heads
-        self._active_heads: int = cfg.model.active_heads
+        self._active_heads: int = cfg.model.heads
         self._embedding_size: int = cfg.model.embedding_size
         self._head_size: int = self._embedding_size // self._total_heads
         self._active_embedding_size: int = self._head_size * self._active_heads

@@ -40,18 +40,12 @@ class ModelConfig:
     checkpoint: str = ""
     layer: int = 12
     heads: int = 12
-    active_heads: int = 8
-    head_activation_step: int = 600_000
     embedding_size: int = 768
     vocab_size: int = 50304
     dropout_rate: float = 0.0
     bias: bool = False
     compile: bool = True
     dtype: str = "bfloat16"
-
-    def __setattr__(self, key, value):
-        assert key != self.active_heads.__name__ or value <= self.heads
-        super().__setattr__(key, value)
 
 @dataclass
 class AdamWConfig:
@@ -88,18 +82,25 @@ class GPTConfig:
     adamw: AdamWConfig
     optimizer: OptimizerConfig
     lr_scheduler: LRSchedulerConfig
+    head_activation_schedule: dict[int, int]
     ddp: DDPConfig
     flash: bool | None = None
     checkpoint_folder: Path | None = None
 
-    def __post_init__(self):
-        assert self.model.embedding_size % self.model.heads == 0
-        assert self.model.active_heads <= self.model.heads
-
     @classmethod
     def load(cls, yaml_file: str) -> Self:
         config: GPTConfig = OmegaConf.load(yaml_file)
+
+        assert config.model.embedding_size % config.model.heads == 0
+
+        assert all(0 <= i <= config.optimizer.max_iters for i in config.head_activation_schedule.keys()), \
+            "Iteration must be between 0 and max_iters"
+
+        assert all(0 < i <= config.model.heads for i in config.head_activation_schedule.values()), \
+            "Active heads must be between 1 and the total number of heads"
+
         config.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+
         config.checkpoint_folder = Path(config.checkpointing.out_dir) / config.wandb.run_name
         config.checkpoint_folder.mkdir(exist_ok=True, parents=True)
         shutil.copy(yaml_file, config.checkpoint_folder)
