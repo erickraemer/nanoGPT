@@ -243,6 +243,20 @@ while True:
 
         for decoder_block in raw_model.get_decoder_blocks():
             decoder_block.attn.set_active_heads(new_active_heads)
+
+            # zero c_proj
+            decoder_block.attn._c_proj.weight.data.zero_()
+            param_id = decoder_block.attn._c_proj.weight
+            if param_id in optimizer.state:
+                print("resetting optimizer state for c_proj")
+                del optimizer.state[param_id]
+
+            if decoder_block.attn._c_proj.bias is not None:
+                decoder_block.attn._c_proj.bias.data.zero_()
+                param_id = decoder_block.attn._c_proj.bias
+                if param_id in optimizer.state:
+                    del optimizer.state[param_id]
+
         active_heads = new_active_heads
 
     # evaluate the loss on train/val sets and write checkpoints
