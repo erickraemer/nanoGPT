@@ -67,13 +67,7 @@ class CausalSelfAttention(Module):
         Returns a view for c_attn's weight based on the current active heads
         """
 
-        weight = self._c_attn.weight.view(self._total_heads, 3, self._head_size, self._embedding_size)
-        weight = weight[:self._active_heads, ...]
-        weight = weight.view(3 * self._active_embedding_size, self._embedding_size)
-
-        # check that the new tensor is a reference and not a copy
-        assert self._c_attn.weight.data_ptr() == weight.data_ptr()
-
+        weight = self._c_attn.weight[:3 * self._active_embedding_size, :]
         return weight
 
     def _get_c_attn_bias_view(self) -> Tensor | None:
@@ -84,13 +78,7 @@ class CausalSelfAttention(Module):
         if self._c_attn.bias is None:
             return None
 
-        bias = self._c_attn.bias.view(self._total_heads, 3, self._head_size)
-        bias = bias[:self._active_heads, ...]
-        bias = bias.view(3 * self._active_embedding_size)
-
-        # check that the new tensor is a reference and not a copy
-        assert self._c_attn.bias.data_ptr() == bias.data_ptr()
-
+        bias = self._c_attn.bias[:3 * self._active_embedding_size]
         return bias
 
     def _get_c_proj_weight_view(self) -> Tensor:
@@ -99,10 +87,6 @@ class CausalSelfAttention(Module):
         """
 
         weight = self._c_proj.weight[:, :self._active_embedding_size]
-
-        # check that the new tensor is a reference and not a copy
-        assert self._c_proj.weight.data_ptr() == weight.data_ptr()
-
         return weight
 
     def _c_attn_forward(self, x: Tensor) -> Tensor:
@@ -179,16 +163,16 @@ class CausalSelfAttention(Module):
         # -> (bs, sl, 3 * aes)
         x = self._c_attn_forward(x)
 
-        q: Tensor
-        k: Tensor
-        v: Tensor
-        # (bs, sl, 3 * aes) -> 3 * (bs, sl, aes)
-        q, k, v = torch.split(x, self._active_embedding_size, dim=2)
+        # Reshape to separate q, k, v and heads in one step
+        x = x.view(bs, sl, 3, self._active_heads, self._head_size)
 
-        # (bs, sl, aes) -> (bs, sl, ah, hs)
-        k = k.view(bs, sl, self._active_heads, self._head_size).transpose(1, 2)
-        q = q.view(bs, sl, self._active_heads, self._head_size).transpose(1, 2)
-        v = v.view(bs, sl, self._active_heads, self._head_size).transpose(1, 2)
+        # Split into q, k, v and rearrange dimensions
+        q, k, v = x.unbind(dim=2)  # Each has shape (batch_size, sequence_length, active_heads, head_size)
+
+        # Transpose to put heads as batch dimension
+        q = q.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
+        k = k.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
+        v = v.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
 
         # causal self-attention; Self-attend: -> (bs, ah, sl, hs)
         x: Tensor = self._attention_func(q, k, v)
