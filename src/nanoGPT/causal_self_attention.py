@@ -1,4 +1,3 @@
-import functools
 import math
 from collections.abc import Callable
 from typing import Final
@@ -157,24 +156,22 @@ class CausalSelfAttention(Module):
         # active heads          (ah)
         # head size             (hs)
 
-        bs, sl, _ = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        bs, sl, _ = x.size()
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim:
-        # -> (bs, sl, 3 * aes)
+        # (bs, sl, 3 * aes)
         x = self._c_attn_forward(x)
-        t = x.view(bs, sl, self._active_heads, 3 * self._head_size)
-        q, k, v = torch.split(t, self._head_size, dim=-1)
+        # (bs, ah, sl, 3*hs)
+        x = x.view(bs, sl, self._active_heads, 3 * self._head_size).transpose(1, 2)
+        # 3 * (bs, ah, sl, hs)
+        q, k, v = x.split(self._head_size, dim=-1)
 
-        q = q.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
-        k = k.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
-        v = v.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
+        # (bs, ah, sl, hs)
+        y = self._attention_func(q, k, v)
+        # (bs, sl, aes)
+        y = y.transpose(1, 2).contiguous().view(bs, sl, self._active_embedding_size)
 
-        # causal self-attention; Self-attend: -> (bs, ah, sl, hs)
-        x: Tensor = self._attention_func(q, k, v)
-        # re-assemble all head outputs side by side: -> (bs, sl, aes)
-        x = x.transpose(1, 2).contiguous().view(bs, sl, self._active_embedding_size)
+        # (bs, sl, es)
+        y = self._c_proj_forward(y)
+        y = self._resid_dropout(y)
 
-        # output projection: -> (bs, sl, es)
-        x = self._c_proj_forward(x)
-        x = self._resid_dropout(x)
-        return x
+        return y
