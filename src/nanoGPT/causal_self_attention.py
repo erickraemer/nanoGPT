@@ -162,14 +162,9 @@ class CausalSelfAttention(Module):
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim:
         # -> (bs, sl, 3 * aes)
         x = self._c_attn_forward(x)
+        t = x.view(bs, sl, self._active_heads, 3 * self._head_size)
+        q, k, v = torch.split(t, self._head_size, dim=-1)
 
-        # Reshape to separate q, k, v and heads in one step
-        x = x.view(bs, sl, 3, self._active_heads, self._head_size)
-
-        # Split into q, k, v and rearrange dimensions
-        q, k, v = x.unbind(dim=2)  # Each has shape (batch_size, sequence_length, active_heads, head_size)
-
-        # Transpose to put heads as batch dimension
         q = q.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
         k = k.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
         v = v.transpose(1, 2)  # (batch_size, active_heads, sequence_length, head_size)
