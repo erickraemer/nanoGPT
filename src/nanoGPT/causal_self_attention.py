@@ -111,9 +111,7 @@ class CausalSelfAttention(Module):
 
         # recalculate sizes
         self._active_heads: int = active_heads
-        self._head_size: int = self._embedding_size // self._total_heads
         self._active_embedding_size: int = self._head_size * active_heads
-
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
