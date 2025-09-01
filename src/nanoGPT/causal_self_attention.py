@@ -150,9 +150,10 @@ class CausalSelfAttention(Module):
         # batch size            (bs)
         # sequence length       (sl)
         # embedding size        (es)
-        # active embedding size (aes)
+        # total heads           (th)
         # active heads          (ah)
-        # head size             (hs)
+        # head size             (hs)  = es / th
+        # active embedding size (aes) = hs * ah
 
         bs, sl, _ = x.size()
 
