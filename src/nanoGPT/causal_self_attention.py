@@ -143,34 +143,45 @@ class CausalSelfAttention(Module):
 
         return att
 
+    def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        """
+        Dynamic head attention that considers only the active heads.
+        """
+
+        # consider only the active heads
+        k = k[:, :self._active_heads, :, :]
+        q = q[:, :self._active_heads, :, :]
+        v = v[:, :self._active_heads, :, :]
+
+        att = self._attention_func(q, k, v)
+
+        # pad to full number of heads
+        att = F.pad(
+            att,
+            (0, 0, 0, 0, 0, self._total_heads - self._active_heads),
+            mode='constant',
+            value=0
+        )
+
+        return att
+
     def forward(self, x: Tensor) -> Tensor:
+        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        hs: Final[int] = C // self._total_heads
 
-        # Terminology
-        # ---------------------------
-        # batch size            (bs)
-        # sequence length       (sl)
-        # embedding size        (es)
-        # total heads           (th)
-        # active heads          (ah)
-        # head size             (hs)  = es / th
-        # active embedding size (aes) = hs * ah
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        x: Tensor = self._c_attn(x)  # (B, T, 3C)
+        q, k, v = torch.split(x, self._embedding_size, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
 
-        bs, sl, _ = x.size()
+        # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
+        k = k.view(B, T, self._total_heads, hs).transpose(1, 2)  # (B, nh, T, hs)
+        q = q.view(B, T, self._total_heads, hs).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self._total_heads, hs).transpose(1, 2)  # (B, nh, T, hs)
 
-        # (bs, sl, 3 * aes)
-        x = self._c_attn_forward(x)
-        # (bs, ah, sl, 3*hs)
-        x = x.view(bs, sl, self._active_heads, 3 * self._head_size).transpose(1, 2)
-        # 3 * (bs, ah, sl, hs)
-        q, k, v = x.split(self._head_size, dim=-1)
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        y = self.dynamic_head_attention(q, k, v)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
-        # (bs, ah, sl, hs)
-        y = self._attention_func(q, k, v)
-        # (bs, sl, aes)
-        y = y.transpose(1, 2).contiguous().view(bs, sl, self._active_embedding_size)
-
-        # (bs, sl, es)
-        y = self._c_proj_forward(y)
-        y = self._resid_dropout(y)
-
+        # output projection
+        y = self._resid_dropout(self._c_proj(y))
         return y
