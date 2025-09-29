@@ -223,7 +223,6 @@ X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
-assert all(dec.attn._cfg is cfg for dec in raw_model.transformer["h"]) # ensure all decoder blocks have the same config
 running_mfu = -1.0
 active_heads: int = cfg.model.heads
 
@@ -293,6 +292,34 @@ while True:
     if cfg.optimizer.grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer.grad_clip)
+
+    # log gradients of all heads
+    if cfg.logging.wandb:
+        norms = {"iter": iter_num}
+        for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
+            attn = decoder_block.attn
+            layer_norm = 0
+            if attn._c_attn.weight.grad is not None:
+                q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0)  # ((T, C), (T, C), (T, C))
+
+                # (T, C) -> (T, H, C/H) with H*C/H = C
+                k = k.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
+                q = q.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
+                v = v.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
+
+                heads = torch.cat((k,q,v), dim=2).cpu()
+
+                for i in range(attn._total_heads):
+                    w_norm = heads[i].data.norm(2)
+                    layer_norm += w_norm.item() ** 2
+
+                    norms[f"layer{layer:02}/head{i:02}/gradient_norm"] = w_norm.item()
+
+                layer_norm = layer_norm ** (1. / 2)
+                norms[f"layer{layer:02}/gradient_norm"] = layer_norm
+
+        wandb.log(norms)
+
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
