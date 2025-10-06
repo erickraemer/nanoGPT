@@ -300,14 +300,13 @@ while True:
             attn = decoder_block.attn
             layer_norm = 0
             if attn._c_attn.weight.grad is not None:
-                q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0)  # ((T, C), (T, C), (T, C))
+                q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0)
 
-                # (T, C) -> (T, H, C/H) with H*C/H = C
-                k = k.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
-                q = q.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
-                v = v.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # (nh, T, hs)
+                k = k.view(attn._total_heads, attn._head_size, attn._embedding_size)
+                q = q.view(attn._total_heads, attn._head_size, attn._embedding_size)
+                v = v.view(attn._total_heads, attn._head_size, attn._embedding_size)
 
-                heads = torch.cat((k,q,v), dim=2).cpu()
+                heads = torch.cat((k,q,v), dim=1).cpu()
 
                 for i in range(attn._total_heads):
                     w_norm = heads[i].data.norm(2)

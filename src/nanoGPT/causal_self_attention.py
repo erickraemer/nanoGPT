@@ -72,20 +72,14 @@ class CausalSelfAttention(Module):
         Dynamic head attention that considers only the active heads.
         """
 
-        # consider only the active heads
-        k = k[:, :self._active_heads, :, :]
-        q = q[:, :self._active_heads, :, :]
-        v = v[:, :self._active_heads, :, :]
+        # zero inactive heads
+        mask = torch.zeros_like(k, requires_grad=False)
+        mask[:, :self._active_heads, :, :] = 1.0
+        k = k * mask
+        q = q * mask
+        v = v * mask
 
         att = self._attention_func(q, k, v)
-
-        # pad to full number of heads
-        att = F.pad(
-            att,
-            (0, 0, 0, 0, 0, self._total_heads - self._active_heads),
-            mode='constant',
-            value=0
-        )
 
         return att
 
