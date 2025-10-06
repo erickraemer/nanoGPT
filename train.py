@@ -294,29 +294,41 @@ while True:
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer.grad_clip)
 
     # log gradients of all heads
+
+    norms = {"iter": iter_num}
+    for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
+        attn = decoder_block.attn
+        layer_norm = 0
+        if attn._c_attn.weight.grad is not None:
+            q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0) # view
+
+            k = k.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+            q = q.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+            v = v.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+
+            heads = torch.cat((k,q,v), dim=1) # copy
+
+            for i in range(attn._total_heads):
+                w_norm = heads[i].data.norm(2)
+                layer_norm += w_norm.item() ** 2
+
+                norms[f"layer{layer:02}/head{i:02}/gradient_norm"] = w_norm.item()
+
+                # zero gradients of inactive heads (freeze weights)
+                if i >= attn._active_heads:
+                    k[i] = 0.0
+                    q[i] = 0.0
+                    v[i] = 0.0
+
+            layer_norm = layer_norm ** (1. / 2)
+            norms[f"layer{layer:02}/gradient_norm"] = layer_norm
+
+        if attn._c_proj.weight.grad is not None:
+            # zero gradients of inactive heads (freeze weights)
+            p_heads = attn._c_proj.weight.grad.view(attn._total_heads, attn._head_size, attn._embedding_size)
+            p_heads[active_heads:, :, :] = 0.0
+
     if cfg.logging.wandb:
-        norms = {"iter": iter_num}
-        for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
-            attn = decoder_block.attn
-            layer_norm = 0
-            if attn._c_attn.weight.grad is not None:
-                q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0)
-
-                k = k.view(attn._total_heads, attn._head_size, attn._embedding_size)
-                q = q.view(attn._total_heads, attn._head_size, attn._embedding_size)
-                v = v.view(attn._total_heads, attn._head_size, attn._embedding_size)
-
-                heads = torch.cat((k,q,v), dim=1).cpu()
-
-                for i in range(attn._total_heads):
-                    w_norm = heads[i].data.norm(2)
-                    layer_norm += w_norm.item() ** 2
-
-                    norms[f"layer{layer:02}/head{i:02}/gradient_norm"] = w_norm.item()
-
-                layer_norm = layer_norm ** (1. / 2)
-                norms[f"layer{layer:02}/gradient_norm"] = layer_norm
-
         wandb.log(norms)
 
     # step the optimizer and scaler if training in fp16

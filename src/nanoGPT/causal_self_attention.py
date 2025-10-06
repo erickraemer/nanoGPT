@@ -61,6 +61,10 @@ class CausalSelfAttention(Module):
         self._active_heads: int = active_heads
         self._active_embedding_size: int = self._head_size * active_heads
 
+        # zero inactive heads in the projection matrix
+        p_heads = self._c_proj.weight.data.view(self._total_heads, self._head_size, self._embedding_size)
+        p_heads[active_heads:, :, :] = 0.0
+
     def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
         """
         Returns the attention function based on whether flash attention is supported.
@@ -128,7 +132,6 @@ class CausalSelfAttention(Module):
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         y = self.dynamic_head_attention(q, k, v)
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
-        z = y.cpu()
 
         # output projection
         y = self._resid_dropout(self._c_proj(y))
