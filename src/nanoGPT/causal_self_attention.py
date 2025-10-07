@@ -77,11 +77,11 @@ class CausalSelfAttention(Module):
         """
 
         # zero inactive heads
-        mask = torch.zeros_like(k, requires_grad=False)
-        mask[:, :self._active_heads, :, :] = 1.0
-        k = k * mask
-        q = q * mask
-        v = v * mask
+        # mask = torch.zeros_like(k, requires_grad=False)
+        # mask[:, :self._active_heads, :, :] = 1.0
+        # k = k * mask
+        # q = q * mask
+        # v = v * mask
 
         att = self._attention_func(q, k, v)
 
