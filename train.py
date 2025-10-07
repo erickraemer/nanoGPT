@@ -298,7 +298,7 @@ while True:
     norms = {"iter": iter_num}
     for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
         attn = decoder_block.attn
-        layer_norm = 0
+        c_attn_total_norm = 0
         if attn._c_attn.weight.grad is not None:
             q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0) # view
 
@@ -310,9 +310,9 @@ while True:
 
             for i in range(attn._total_heads):
                 w_norm = heads[i].data.norm(2)
-                layer_norm += w_norm.item() ** 2
+                c_attn_total_norm += w_norm.item() ** 2
 
-                norms[f"layer{layer:02}/head{i:02}/gradient_norm"] = w_norm.item()
+                norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = w_norm.item()
 
                 # zero gradients of inactive heads (freeze weights)
                 if i >= attn._active_heads:
@@ -320,12 +320,22 @@ while True:
                     q[i] = 0.0
                     v[i] = 0.0
 
-            layer_norm = layer_norm ** (1. / 2)
-            norms[f"layer{layer:02}/gradient_norm"] = layer_norm
+            c_attn_total_norm = c_attn_total_norm ** (1. / 2)
+            norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = c_attn_total_norm
 
         if attn._c_proj.weight.grad is not None:
+            c_proj_total_norm = 0
             # zero gradients of inactive heads (freeze weights)
             p_heads = attn._c_proj.weight.grad.view(attn._total_heads, attn._head_size, attn._embedding_size)
+            for i in range(attn._total_heads):
+                w_norm = p_heads[i].data.norm(2)
+                c_proj_total_norm += w_norm.item() ** 2
+
+                norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = w_norm.item()
+
+            c_proj_total_norm = c_proj_total_norm ** (1. / 2)
+            norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = c_proj_total_norm
+            # zero inactive heads
             p_heads[active_heads:, :, :] = 0.0
 
     if cfg.logging.wandb:
