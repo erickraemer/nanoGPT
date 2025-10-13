@@ -62,8 +62,8 @@ class CausalSelfAttention(Module):
         self._active_embedding_size: int = self._head_size * active_heads
 
         # zero inactive heads in the projection matrix
-        p_heads = self._c_proj.weight.data.view(self._total_heads, self._head_size, self._embedding_size)
-        p_heads[active_heads:, :, :] = 0.0
+        p_heads = self._c_proj.weight.data.view(self._embedding_size, self._total_heads, self._head_size)
+        p_heads[:, active_heads:, :] = 0.0
 
     def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
         """
@@ -75,13 +75,6 @@ class CausalSelfAttention(Module):
         """
         Dynamic head attention that considers only the active heads.
         """
-
-        # zero inactive heads
-        # mask = torch.zeros_like(k, requires_grad=False)
-        # mask[:, :self._active_heads, :, :] = 1.0
-        # k = k * mask
-        # q = q * mask
-        # v = v * mask
 
         att = self._attention_func(q, k, v)
 
