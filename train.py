@@ -293,23 +293,34 @@ while True:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optimizer.grad_clip)
 
-    # log gradients of all heads
+    # step the optimizer and scaler if training in fp16
+    scaler.step(optimizer)
 
+    # log gradients of all heads
     norms = {"iter": iter_num}
     for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
         attn = decoder_block.attn
         c_attn_total_norm = 0
         if attn._c_attn.weight.grad is not None:
+            c_attn_opt_state = optimizer.state[attn._c_attn.weight]
+            v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+
             q, k, v = torch.split(attn._c_attn.weight.grad, attn._embedding_size, dim=0) # view
+            q_v, k_v, v_v = torch.split(v_sq, attn._embedding_size, dim=0) # view
 
             k = k.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
             q = q.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
             v = v.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
 
+            q_v = q_v.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+            k_v = k_v.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+            v_v = v_v.view(attn._total_heads, attn._head_size, attn._embedding_size) # view
+
             heads = torch.cat((k,q,v), dim=1) # copy
+            v_sq = torch.cat((k_v, q_v, v_v), dim=1) # copy
 
             for i in range(attn._total_heads):
-                w_norm = heads[i].data.norm(2)
+                w_norm = torch.linalg.norm(heads[i].data/v_sq[i].data)
                 c_attn_total_norm += w_norm.item() ** 2
 
                 norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = w_norm.item()
@@ -324,11 +335,14 @@ while True:
             norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = c_attn_total_norm
 
         if attn._c_proj.weight.grad is not None:
+            c_proj_opt_state = optimizer.state[attn._c_proj.weight]
+            v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
             c_proj_total_norm = 0
             # zero gradients of inactive heads (freeze weights)
             p_heads = attn._c_proj.weight.grad.view(attn._embedding_size, attn._total_heads, attn._head_size)
+            v_sq = v_sq.view(attn._embedding_size, attn._total_heads, attn._head_size)
             for i in range(attn._total_heads):
-                w_norm = p_heads[:, i].data.norm(2)
+                w_norm = torch.linalg.norm(p_heads[:, i].data/v_sq[:, i].data)
                 c_proj_total_norm += w_norm.item() ** 2
 
                 norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = w_norm.item()
@@ -341,8 +355,6 @@ while True:
     if cfg.logging.wandb:
         wandb.log(norms)
 
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
