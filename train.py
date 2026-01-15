@@ -30,6 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from nanoGPT import util
+from nanoGPT.causal_self_attention import CausalSelfAttention
 from nanoGPT.decoder_block import DecoderBlock
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
@@ -299,7 +300,7 @@ while True:
     # log gradients of all heads
     norms = {"iter": iter_num}
     for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
-        attn = decoder_block.attn
+        attn: CausalSelfAttention = decoder_block.attn
 
         if attn._c_attn.weight.grad is None:
             continue
@@ -322,6 +323,8 @@ while True:
 
         layer_norm = torch.sum(projection_head_norms ** 2) ** (1. / 2)
         norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm
+
+    print(norms)
 
     if cfg.logging.wandb:
         wandb.log(norms)

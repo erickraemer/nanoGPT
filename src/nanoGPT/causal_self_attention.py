@@ -30,6 +30,8 @@ class CausalSelfAttention(Module):
 
         # output projection
         self._c_proj: Final[Linear] = Linear(cfg.model.embedding_size, cfg.model.embedding_size, bias=cfg.model.bias)
+        self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
+        self._last_c_proj_grad_norm: Tensor | None = None
 
         # regularization
         self._attn_dropout = Dropout(cfg.model.dropout_rate)
@@ -70,6 +72,14 @@ class CausalSelfAttention(Module):
         Returns the attention function based on whether flash attention is supported.
         """
         return self.flash_attention if cfg.flash else self.manual_attention
+
+    def _mask_inactive_projection_gradients(self, grad: Tensor) -> Tensor:
+        """Hook to zero out gradients for inactive heads in the projection matrix"""
+
+        masked_grad = grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
+        self._last_c_proj_grad_norm = torch.linalg.norm(masked_grad, dim=(1, 2))
+        masked_grad[self._active_heads:, :, :] = 0.0
+        return grad
 
     def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         """
@@ -125,8 +135,7 @@ class CausalSelfAttention(Module):
         return norms
 
     def get_projection_head_gradient_norms(self) -> Tensor | None:
-        heads = self._c_proj.weight.grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0,1)
-        norms = torch.linalg.norm(heads, dim=(1, 2))
+        norms = self._last_c_proj_grad_norm
 
         assert norms.size(0) == self._total_heads
 
