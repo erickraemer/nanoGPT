@@ -324,8 +324,6 @@ while True:
         layer_norm = torch.sum(projection_head_norms ** 2) ** (1. / 2)
         norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm
 
-    print(norms)
-
     if cfg.logging.wandb:
         wandb.log(norms)
 
