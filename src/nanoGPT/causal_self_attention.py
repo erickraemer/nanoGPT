@@ -110,6 +110,28 @@ class CausalSelfAttention(Module):
 
         return att
 
+    def get_attention_head_gradient_norms(self) -> Tensor | None:
+        q, k, v = torch.split(self._c_attn.weight.grad, self._embedding_size, dim=0)  # view
+
+        k = k.view(self._total_heads, self._head_size, self._embedding_size)  # view
+        q = q.view(self._total_heads, self._head_size, self._embedding_size)  # view
+        v = v.view(self._total_heads, self._head_size, self._embedding_size)  # view
+
+        heads = torch.cat((k, q, v), dim=1)  # copy
+        norms = torch.linalg.norm(heads, dim=(1, 2))  # copy
+
+        assert norms.size(0) == self._total_heads
+
+        return norms
+
+    def get_projection_head_gradient_norms(self) -> Tensor | None:
+        heads = self._c_proj.weight.grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0,1)
+        norms = torch.linalg.norm(heads, dim=(1, 2))
+
+        assert norms.size(0) == self._total_heads
+
+        return norms
+
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
@@ -118,8 +140,8 @@ class CausalSelfAttention(Module):
         q, k, v = torch.split(x, self._embedding_size, dim=2)  # ((B, T, C), (B, T, C), (B, T, C))
 
         # (B, T, C) -> (B, T, H, C/H) with H*C/H = C
-        k = k.view(B, T, self._total_heads, self._head_size).transpose(1, 2)  # (B, nh, T, hs)
         q = q.view(B, T, self._total_heads, self._head_size).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self._total_heads, self._head_size).transpose(1, 2)  # (B, nh, T, hs)
         v = v.view(B, T, self._total_heads, self._head_size).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
@@ -127,5 +149,6 @@ class CausalSelfAttention(Module):
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
-        y = self._resid_dropout(self._c_proj(y))
+        # y = self._resid_dropout(self._c_proj(y))
+        y = self._c_proj(y)
         return y
