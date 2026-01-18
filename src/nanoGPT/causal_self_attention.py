@@ -31,7 +31,7 @@ class CausalSelfAttention(Module):
         # output projection
         self._c_proj: Final[Linear] = Linear(cfg.model.embedding_size, cfg.model.embedding_size, bias=cfg.model.bias)
         self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
-        self._last_c_proj_grad_norm: Tensor | None = None
+        self._last_c_proj_grad: Tensor | None = None
 
         # regularization
         self._attn_dropout = Dropout(cfg.model.dropout_rate)
@@ -77,7 +77,7 @@ class CausalSelfAttention(Module):
         """Hook to zero out gradients for inactive heads in the projection matrix"""
 
         masked_grad = grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
-        self._last_c_proj_grad_norm = torch.linalg.norm(masked_grad, dim=(1, 2))
+        self._last_c_proj_grad = masked_grad
         masked_grad[self._active_heads:, :, :] = 0.0
         return grad
 
@@ -120,7 +120,7 @@ class CausalSelfAttention(Module):
 
         return att
 
-    def get_attention_head_gradient_norms(self) -> Tensor | None:
+    def get_attention_head_gradients(self) -> Tensor | None:
         q, k, v = torch.split(self._c_attn.weight.grad, self._embedding_size, dim=0)  # view
 
         k = k.view(self._total_heads, self._head_size, self._embedding_size)  # view
@@ -128,14 +128,13 @@ class CausalSelfAttention(Module):
         v = v.view(self._total_heads, self._head_size, self._embedding_size)  # view
 
         heads = torch.cat((k, q, v), dim=1)  # copy
-        norms = torch.linalg.norm(heads, dim=(1, 2))  # copy
 
-        assert norms.size(0) == self._total_heads
+        assert heads.size(0) == self._total_heads
 
-        return norms
+        return heads
 
-    def get_projection_head_gradient_norms(self) -> Tensor | None:
-        norms = self._last_c_proj_grad_norm
+    def get_projection_head_gradients(self) -> Tensor | None:
+        norms = self._last_c_proj_grad
 
         assert norms.size(0) == self._total_heads
 

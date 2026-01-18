@@ -305,24 +305,46 @@ while True:
         if attn._c_attn.weight.grad is None:
             continue
 
-        attention_head_norms = attn.get_attention_head_gradient_norms()
+        attention_heads = attn.get_attention_head_gradients()
+
+        c_attn_opt_state = optimizer.state[attn._c_attn.weight]
+        v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+        q_v, k_v, v_v = torch.split(v_sq, attn._embedding_size, dim=0)  # view
+        q_v = q_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
+        k_v = k_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
+        v_v = v_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
+
+        v_sq = torch.cat((k_v, q_v, v_v), dim=1)  # copy
+        head_norms = torch.linalg.norm(attention_heads, dim=(1, 2)) # copy
+        transformed_norms = torch.linalg.norm(attention_heads / v_sq, dim=(1, 2)) # copy
 
         for i in range(attn._total_heads):
-            norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = attention_head_norms[i].item()
+            norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = head_norms[i].item()
+            norms[f"transformed_norm/layer{layer:02}/c_attn/head{i:02}"] = transformed_norms[i].item()
 
-        layer_norm = torch.sum(attention_head_norms ** 2) ** (1. / 2)
-        norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = layer_norm
+        layer_norm = torch.linalg.norm(attention_heads)
+        transformed_layer_norm = torch.linalg.norm(attention_heads / v_sq)
+        norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
+        norms[f"transformed_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
 
         if attn._c_proj.weight.grad is None:
             continue
 
-        projection_head_norms = attn.get_projection_head_gradient_norms()
+        projection_heads = attn.get_projection_head_gradients()
+        c_proj_opt_state = optimizer.state[attn._c_proj.weight]
+        v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+        v_sq = v_sq.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # view
+        transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=(1, 2))  # copy
+        projection_head_norms = torch.linalg.norm(projection_heads, dim=(1, 2))  #
 
         for i in range(attn._total_heads):
             norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = projection_head_norms[i].item()
+            norms[f"transformed_norm/layer{layer:02}/c_proj/head{i:02}"] = transformed_norms[i].item()
 
-        layer_norm = torch.sum(projection_head_norms ** 2) ** (1. / 2)
+        layer_norm = torch.linalg.norm(projection_heads)
+        transformed_layer_norm = torch.linalg.norm(projection_heads / v_sq)
         norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm
+        norms[f"transformed_norm/layer{layer:02}/c_proj/total"] = transformed_layer_norm
 
     if cfg.logging.wandb:
         wandb.log(norms)
