@@ -41,6 +41,18 @@ class CausalSelfAttention(Module):
         self._attention_func: Final[AttentionFunction] = self._get_attention_func(cfg)
         self._create_causal_mask(cfg)
 
+    @property
+    def embedding_size(self) -> int:
+        return self._embedding_size
+
+    @property
+    def head_size(self) -> int:
+        return self._head_size
+
+    @property
+    def total_heads(self) -> int:
+        return self._total_heads
+
     def _create_causal_mask(self, cfg: GPTConfig):
         """
         Create causal mask to ensure that attention is only applied to the left in
@@ -77,7 +89,7 @@ class CausalSelfAttention(Module):
         """Hook to zero out gradients for inactive heads in the projection matrix"""
 
         masked_grad = grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
-        self._last_c_proj_grad = masked_grad
+        self._last_c_proj_grad = masked_grad.clone().detach()
         masked_grad[self._active_heads:, :, :] = 0.0
         return grad
 
@@ -127,7 +139,7 @@ class CausalSelfAttention(Module):
         q = q.view(self._total_heads, self._head_size, self._embedding_size)  # view
         v = v.view(self._total_heads, self._head_size, self._embedding_size)  # view
 
-        heads = torch.cat((k, q, v), dim=1)  # copy
+        heads = torch.cat((k, q, v), dim=1).detach()  # copy
 
         assert heads.size(0) == self._total_heads
 

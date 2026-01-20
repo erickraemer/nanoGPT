@@ -213,6 +213,90 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return cfg.lr_scheduler.min_lr + coeff * (cfg.optimizer.learning_rate - cfg.lr_scheduler.min_lr)
 
+def log_attention_head_norms(attn: CausalSelfAttention, layer: int) -> dict[str, float]:
+    norms: dict[str, float] = {}
+
+    attention_heads = attn.get_attention_head_gradients()
+
+    c_attn_opt_state = optimizer.state[attn._c_attn.weight]
+    v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+    q_v, k_v, v_v = torch.split(v_sq, attn.embedding_size, dim=0)  # view
+    q_v = q_v.view(attn.total_heads, attn.head_size, attn.embedding_size)  # view
+    k_v = k_v.view(attn.total_heads, attn.head_size, attn.embedding_size)  # view
+    v_v = v_v.view(attn.total_heads, attn.head_size, attn.embedding_size)  # view
+
+    v_sq = torch.cat((k_v, q_v, v_v), dim=1)  # copy
+    head_norms = torch.linalg.norm(attention_heads, dim=(1, 2))  # copy
+    transformed_norms = torch.linalg.norm(attention_heads / v_sq, dim=(1, 2))  # copy
+
+    for i in range(attn.total_heads):
+        norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = head_norms[i].item()
+        norms[f"transformed_norm/layer{layer:02}/c_attn/head{i:02}"] = transformed_norms[i].item()
+
+    layer_norm = torch.linalg.norm(attention_heads)
+    transformed_layer_norm = torch.linalg.norm(attention_heads / v_sq)
+    norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
+    norms[f"transformed_norm/layer{layer:02}/c_attn/total"] = transformed_layer_norm.item()
+
+    return norms
+
+def log_projection_head_norms(attn: CausalSelfAttention, layer: int) -> dict[str, float]:
+    norms: dict[str, float] = {}
+
+
+    projection_heads = attn.get_projection_head_gradients()
+    c_proj_opt_state = optimizer.state[attn._c_proj.weight]
+    v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+    v_sq = v_sq.view(attn.embedding_size, attn.total_heads, attn.head_size).transpose(0, 1)  # view
+    transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=(1, 2))  # copy
+    projection_head_norms = torch.linalg.norm(projection_heads, dim=(1, 2))  #
+
+    for i in range(attn.total_heads):
+        norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = projection_head_norms[i].item()
+        norms[f"transformed_norm/layer{layer:02}/c_proj/head{i:02}"] = transformed_norms[i].item()
+
+    layer_norm = torch.linalg.norm(projection_heads)
+    transformed_layer_norm = torch.linalg.norm(projection_heads / v_sq)
+    norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm.item()
+    norms[f"transformed_norm/layer{layer:02}/c_proj/total"] = transformed_layer_norm.item()
+
+    return norms
+
+last_norms: dict[str, int | float] = {}
+
+def log_gradients(model_: GPT):
+    if not cfg.logging.wandb:
+        return
+
+    # log gradients of all heads
+    norms: dict[str, int | float] = {"iter": iter_num}
+    for layer, block in enumerate(model_.get_decoder_blocks()):
+        attn: CausalSelfAttention = block.attn
+
+        attention_norms = log_attention_head_norms(attn, layer)
+        norms.update(attention_norms)
+
+
+        projection_norms = log_projection_head_norms(attn, layer)
+        norms.update(projection_norms)
+
+    # calculate exponential moving average (ema)
+    period: int = 1000
+    alpha = 2/(period+1)
+
+    global last_norms
+
+    for k, v in norms.items():
+        if k == "iter":
+            continue
+
+        last_v = last_norms.get(k, v)
+        norms[k] = alpha * v + (1 - alpha) * last_v
+
+    last_norms = norms.copy()
+
+    wandb.log(norms)
+
 # logging
 if cfg.logging.wandb and master_process:
     import wandb
@@ -297,57 +381,8 @@ while True:
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
 
-    # log gradients of all heads
-    norms = {"iter": iter_num}
-    for layer, decoder_block in enumerate(raw_model.get_decoder_blocks()):
-        attn: CausalSelfAttention = decoder_block.attn
-
-        if attn._c_attn.weight.grad is None:
-            continue
-
-        attention_heads = attn.get_attention_head_gradients()
-
-        c_attn_opt_state = optimizer.state[attn._c_attn.weight]
-        v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
-        q_v, k_v, v_v = torch.split(v_sq, attn._embedding_size, dim=0)  # view
-        q_v = q_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
-        k_v = k_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
-        v_v = v_v.view(attn._total_heads, attn._head_size, attn._embedding_size)  # view
-
-        v_sq = torch.cat((k_v, q_v, v_v), dim=1)  # copy
-        head_norms = torch.linalg.norm(attention_heads, dim=(1, 2)) # copy
-        transformed_norms = torch.linalg.norm(attention_heads / v_sq, dim=(1, 2)) # copy
-
-        for i in range(attn._total_heads):
-            norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = head_norms[i].item()
-            norms[f"transformed_norm/layer{layer:02}/c_attn/head{i:02}"] = transformed_norms[i].item()
-
-        layer_norm = torch.linalg.norm(attention_heads)
-        transformed_layer_norm = torch.linalg.norm(attention_heads / v_sq)
-        norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
-        norms[f"transformed_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
-
-        if attn._c_proj.weight.grad is None:
-            continue
-
-        projection_heads = attn.get_projection_head_gradients()
-        c_proj_opt_state = optimizer.state[attn._c_proj.weight]
-        v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
-        v_sq = v_sq.view(attn._embedding_size, attn._total_heads, attn._head_size).transpose(0, 1)  # view
-        transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=(1, 2))  # copy
-        projection_head_norms = torch.linalg.norm(projection_heads, dim=(1, 2))  #
-
-        for i in range(attn._total_heads):
-            norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = projection_head_norms[i].item()
-            norms[f"transformed_norm/layer{layer:02}/c_proj/head{i:02}"] = transformed_norms[i].item()
-
-        layer_norm = torch.linalg.norm(projection_heads)
-        transformed_layer_norm = torch.linalg.norm(projection_heads / v_sq)
-        norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm
-        norms[f"transformed_norm/layer{layer:02}/c_proj/total"] = transformed_layer_norm
-
-    if cfg.logging.wandb:
-        wandb.log(norms)
+    # log gradients to wandb
+    log_gradients(raw_model)
 
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
