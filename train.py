@@ -264,7 +264,7 @@ def log_projection_head_norms(attn: CausalSelfAttention, layer: int) -> dict[str
 
 last_norms: dict[str, int | float] = {}
 
-def log_gradients(model_: GPT):
+def log_gradients(model_: GPT, iter_num: int):
     if not cfg.logging.wandb:
         return
 
@@ -295,7 +295,8 @@ def log_gradients(model_: GPT):
 
     last_norms = norms.copy()
 
-    wandb.log(norms)
+    if iter_num % cfg.eval.interval == 0 and master_process:
+        wandb.log(norms)
 
 # logging
 if cfg.logging.wandb and master_process:
@@ -382,7 +383,7 @@ while True:
     scaler.step(optimizer)
 
     # log gradients to wandb
-    log_gradients(raw_model)
+    log_gradients(raw_model, iter_num)
 
     scaler.update()
     # flush the gradients as soon as we can, no need for this memory anymore
