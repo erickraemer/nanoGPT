@@ -76,8 +76,8 @@ class CausalSelfAttention(Module):
         self._active_embedding_size: int = self._head_size * active_heads
 
         # zero inactive heads in the projection matrix
-        p_heads = self._c_proj.weight.data.view(self._embedding_size, self._total_heads, self._head_size)
-        p_heads[:, active_heads:, :] = 0.0
+        p_heads = self.get_projection_head_view(self._c_proj.weight.data)
+        p_heads[active_heads:, :, :].zero_()
 
     def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
         """
@@ -88,19 +88,10 @@ class CausalSelfAttention(Module):
     def _mask_inactive_projection_gradients(self, grad: Tensor) -> Tensor:
         """Hook to zero out gradients for inactive heads in the projection matrix"""
 
-        masked_grad = grad.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
+        masked_grad = self.get_projection_head_view(grad)
         self._last_c_proj_grad = masked_grad.clone().detach()
-        masked_grad[self._active_heads:, :, :] = 0.0
+        masked_grad[self._active_heads:, :, :].zero_()
         return grad
-
-    def dynamic_head_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-        """
-        Dynamic head attention that considers only the active heads.
-        """
-
-        att = self._attention_func(q, k, v)
-
-        return att
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
         """
@@ -132,23 +123,53 @@ class CausalSelfAttention(Module):
 
         return att
 
-    def get_attention_head_gradients(self) -> Tensor | None:
-        q, k, v = torch.split(self._c_attn.weight.grad, self._embedding_size, dim=0)  # view
+    def get_projection_head_view(self, weight: Tensor) -> Tensor:
+        """
+        Returns a view of the projection heads.
+        """
+
+        weight = weight.data.view(self._embedding_size, self._total_heads, self._head_size)
+        weight = weight.transpose(0, 1)
+
+        assert weight.shape == (self._total_heads, self._embedding_size, self._head_size)
+        return weight
+
+    def get_attention_head_view(self, weight: Tensor) -> Tensor:
+        """
+        Returns a view of the attention weight with the
+        shape (total_heads, 3 (K, Q, V), head_size, embed_size).
+        """
+
+        # attention weight shape is (3xEmbedding Size, Embedding Size)
+        q, k, v = torch.split(weight, self._embedding_size, dim=0)  # view
 
         k = k.view(self._total_heads, self._head_size, self._embedding_size)  # view
         q = q.view(self._total_heads, self._head_size, self._embedding_size)  # view
         v = v.view(self._total_heads, self._head_size, self._embedding_size)  # view
 
-        heads = torch.cat((k, q, v), dim=1).detach()  # copy
+        heads = torch.stack((k, q, v), dim=1)
 
-        assert heads.size(0) == self._total_heads
+        assert heads.shape == (self._total_heads, 3, self._head_size, self._embedding_size)
+
+        return heads
+
+    def get_attention_head_gradients(self) -> Tensor | None:
+        """
+        Returns a view of the attention gradients with the shape (total_heads, 3 (K, Q, V), head_size, embed_size).
+        """
+
+        heads = self.get_attention_head_view(self._c_attn.weight.grad).detach()
 
         return heads
 
     def get_projection_head_gradients(self) -> Tensor | None:
+        """
+        Returns a view of the projection head gradients with the shape (total_heads, embed_size, head_size).
+        """
+
         norms = self._last_c_proj_grad
 
-        assert norms.size(0) == self._total_heads
+        assert norms.shape == (self._total_heads, self.embedding_size, self._head_size)
 
         return norms
 
@@ -165,7 +186,7 @@ class CausalSelfAttention(Module):
         v = v.view(B, T, self._total_heads, self._head_size).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        y = self.dynamic_head_attention(q, k, v)
+        y = self._attention_func(q, k, v)
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
