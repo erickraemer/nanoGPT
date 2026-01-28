@@ -1,6 +1,6 @@
 import math
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Iterable
 
 import torch
 import torch.nn.functional as F
@@ -19,10 +19,10 @@ class CausalSelfAttention(Module):
 
         # hyperparameter
         self._total_heads: int = cfg.model.heads
-        self._active_heads: int = cfg.model.heads
+        # projection head mask: true = disabled, false = enabled
+        self._projection_head_mask: Tensor = torch.full((self._total_heads,), False, dtype=torch.bool)
         self._embedding_size: int = cfg.model.embedding_size
         self._head_size: int = self._embedding_size // self._total_heads
-        self._active_embedding_size: int = self._head_size * self._active_heads
         self._dropout_rate = cfg.model.dropout_rate
 
         # key, query, value projections for all heads, but in a batch
@@ -39,7 +39,6 @@ class CausalSelfAttention(Module):
 
         # choose whether to use flash attention or manual attention
         self._attention_func: Final[AttentionFunction] = self._get_attention_func(cfg)
-        self._create_causal_mask(cfg)
 
     @property
     def embedding_size(self) -> int:
@@ -53,14 +52,37 @@ class CausalSelfAttention(Module):
     def total_heads(self) -> int:
         return self._total_heads
 
-    def _create_causal_mask(self, cfg: GPTConfig):
+    def set_disabled_heads(self, disabled_heads: Iterable[int]):
         """
-        Create causal mask to ensure that attention is only applied to the left in
-        the input sequence when using manual attention.
+        Disables attention heads in the projection matrix. All other heads will be enabled.
+        :param disabled_heads: an iterable of heads to disable starting at zero.
+        """
+        disabled_heads = set(disabled_heads)
+        active_heads = (i for i in range(self.total_heads) if i not in disabled_heads)
+        self.set_active_heads(active_heads)
+
+    def set_active_heads(self, active_heads: Iterable[int]):
+        """
+        Enables attention heads in the projection matrix. All other heads will be disabled.
+        :param active_heads: an iterable of heads to enable starting at zero.
         """
 
+        mask = torch.full((self._total_heads,), False, dtype=torch.bool)
+        for i in active_heads:
+            mask[i] = True
+
+        self._projection_head_mask = mask
+
+        # zero inactive heads in the projection matrix
+        p_heads = self.get_projection_head_view(self._c_proj.weight.data)
+        p_heads[self._projection_head_mask].zero_()
+
+    def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
+        """
+        Returns the attention function based on whether flash attention is supported.
+        """
         if cfg.flash:
-            return
+            return self.flash_attention
 
         self.register_buffer(
             "_bias",
@@ -68,29 +90,14 @@ class CausalSelfAttention(Module):
             .view(1, 1, cfg.data.block_size, cfg.data.block_size)
         )
 
-    def set_active_heads(self, active_heads: int):
-        assert 0 < active_heads <= self._total_heads
-
-        # recalculate sizes
-        self._active_heads: int = active_heads
-        self._active_embedding_size: int = self._head_size * active_heads
-
-        # zero inactive heads in the projection matrix
-        p_heads = self.get_projection_head_view(self._c_proj.weight.data)
-        p_heads[active_heads:, :, :].zero_()
-
-    def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
-        """
-        Returns the attention function based on whether flash attention is supported.
-        """
-        return self.flash_attention if cfg.flash else self.manual_attention
+        return self.manual_attention
 
     def _mask_inactive_projection_gradients(self, grad: Tensor) -> Tensor:
         """Hook to zero out gradients for inactive heads in the projection matrix"""
 
         masked_grad = self.get_projection_head_view(grad)
         self._last_c_proj_grad = masked_grad.clone().detach()
-        masked_grad[self._active_heads:, :, :].zero_()
+        masked_grad[self._projection_head_mask].zero_()
         return grad
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
