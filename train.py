@@ -247,8 +247,6 @@ class TrainEvalHandler:
         return distributions
 
     def log_metrics(self, model: GPT, iter_num: int):
-        if not self.cfg.logging.wandb:
-            return
 
         # log gradients of all heads
         metrics: dict[str, int | float | CustomChart] = {"iter": iter_num}
@@ -279,6 +277,10 @@ class TrainEvalHandler:
             metrics[k] = alpha * v + (1 - alpha) * last_v
 
         self.last_norms = metrics.copy()
+
+        # only return here to be able to debug this
+        if not self.cfg.logging.wandb:
+            return
 
         if iter_num % self.cfg.eval.interval == 0:
             wandb.log(metrics)
@@ -338,8 +340,8 @@ class TrainEvalHandler:
                 if cfg.logging.wandb:
                     wandb.log({
                         "iter": self.iter_num,
-                        "train/loss": losses['train'],
-                        "val/loss": losses['val'],
+                        "loss/train": losses['train'],
+                        "loss/val": losses['val'],
                         "lr": lr,
                         "mfu": running_mfu * 100,  # convert to percentage
                         "n_active_heads": active_heads,
