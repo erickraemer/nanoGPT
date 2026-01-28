@@ -30,6 +30,7 @@ class CheckpointingConfig:
 
 @dataclass
 class DataConfig:
+    path: str = ""
     dataset: str = "openwebtext"
     gradient_accumulation_steps: int = 5
     batch_size: int = 12
@@ -37,6 +38,7 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
+    seed: int = 1337
     checkpoint: str = ""
     layer: int = 12
     heads: int = 12
