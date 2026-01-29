@@ -146,7 +146,7 @@ class TrainEvalHandler:
             scaler.load_state_dict(checkpoint['scaler'])
 
         # create data loader
-        self.data_loader = DataLoader(self.cfg, device_type)
+        self.data_loader = DataLoader(self.cfg, device)
 
         if cfg.model.compile:
             print("compiling the model... (takes a ~minute)")
