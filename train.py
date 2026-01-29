@@ -345,6 +345,7 @@ class TrainEvalHandler:
             # backup c_proj weight
             attn = decoder_block.attn
             weight = attn._c_proj.weight.data.clone()
+            head_mask = attn._projection_head_mask.clone()
 
             for head in range(decoder_block.attn.total_heads):
                 # disable heads (this modifies the c_proj in this layer)
@@ -356,6 +357,7 @@ class TrainEvalHandler:
 
                 # restore c_proj
                 attn._c_proj.weight.data = weight.clone()
+                attn._projection_head_mask = head_mask.clone()
 
         wandb.log(losses)
 
