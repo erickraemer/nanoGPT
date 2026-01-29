@@ -2,10 +2,14 @@ import math
 import sys
 import time
 from contextlib import nullcontext
+from operator import itemgetter
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
+from torch import Tensor
+
 import wandb
 from omegaconf import OmegaConf
 
@@ -149,22 +153,27 @@ class TrainEvalHandler:
             self.model = torch.compile(model)  # requires PyTorch 2.0
 
     @torch.no_grad()
-    def estimate_loss(self):
+    def _estimate_loss(self, dataset: Literal["train", "val"]) -> Tensor:
 
         model: GPT = self.model
-        out = {}
-
         model.eval()
-        for split in ['train', 'val']:
-            losses = torch.zeros(self.cfg.eval.iters)
-            for k in range(self.cfg.eval.iters):
-                X, Y = self.data_loader.get_batch(split)
-                with self.ctx:
-                    logits, loss = model(X, Y)
-                losses[k] = loss.item()
-            out[split] = losses.mean()
+
+        losses = torch.zeros(self.cfg.eval.iters)
+        for k in range(self.cfg.eval.iters):
+            X, Y = self.data_loader.get_batch(dataset)
+            with self.ctx:
+                logits, loss = model(X, Y)
+            losses[k] = loss.item()
+        loss = losses.mean()
+
         model.train()
-        return out
+        return loss
+
+    def estimate_val_loss(self):
+        return self._estimate_loss("val")
+
+    def estimate_train_loss(self):
+        return self._estimate_loss("train")
 
     # learning rate decay scheduler (cosine with warmup)
     def get_lr(self, it):
@@ -304,7 +313,53 @@ class TrainEvalHandler:
 
         torch.save(checkpoint, self.cfg.checkpoint_folder / f"ckpt_{iter}.pt")
 
-    def loop(self):
+    def eval(self, metadata: dict | None = None):
+
+        if metadata is None:
+            metadata = {}
+
+        t_loss = self.estimate_train_loss()
+        v_loss = self.estimate_val_loss()
+        print(f"step {self.iter_num}: train loss {t_loss:.4f}, val loss {v_loss:.4f}")
+        if not self.cfg.logging.wandb:
+            return
+
+        metrics = {
+            "iter": self.iter_num,
+            "loss/train": t_loss,
+            "loss/val": v_loss,
+            "n_active_heads": metadata.get("n_active_heads", self.cfg.model.heads)
+        }
+
+        metrics.update(metadata)
+        wandb.log(metrics)
+
+    def head_dropout_eval(self):
+        losses = {
+            "iter": self.iter_num
+        }
+
+        baseline_v_loss = self.estimate_val_loss()
+
+        for layer, decoder_block in enumerate(self.model.get_decoder_blocks()):
+            # backup c_proj weight
+            attn = decoder_block.attn
+            weight = attn._c_proj.weight.data.clone()
+
+            for head in range(decoder_block.attn.total_heads):
+                # disable heads (this modifies the c_proj in this layer)
+                attn.set_disabled_heads([head])
+
+                v_loss = self.estimate_val_loss()
+                val_delta = v_loss - baseline_v_loss
+                losses[f"head_importance/layer{layer:02}/head{head:02}"] = val_delta.item()
+
+                # restore c_proj
+                attn._c_proj.weight.data = weight.clone()
+
+        wandb.log(losses)
+
+    def train(self):
         X, Y = self.data_loader.get_batch('train')  # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0  # number of iterations in the lifetime of this process
@@ -335,23 +390,15 @@ class TrainEvalHandler:
 
             # evaluate the loss on train/val sets and write checkpoints
             if self.iter_num % cfg.eval.interval == 0:
-                losses = self.estimate_loss()
-                print(f"step {self.iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-                if cfg.logging.wandb:
-                    wandb.log({
-                        "iter": self.iter_num,
-                        "loss/train": losses['train'],
-                        "loss/val": losses['val'],
-                        "lr": lr,
-                        "mfu": running_mfu * 100,  # convert to percentage
-                        "n_active_heads": active_heads,
-                    })
+                self.eval({
+                    "lr": lr,
+                    "mfu": running_mfu * 100,  # convert to percentage
+                    "n_active_heads": active_heads,
+                })
+                self.head_dropout_eval()
 
             if self.iter_num % cfg.checkpointing.interval == 0 and self.iter_num > self.start_iter:
                 self.create_checkpoint()
-
-            if self.iter_num == 0 and cfg.eval.only:
-                break
 
             # forward backward update, with optional gradient accumulation to simulate larger batch size
             # and using the GradScaler if data type is float16
@@ -400,7 +447,11 @@ class TrainEvalHandler:
 def main():
     teh = TrainEvalHandler()
     teh.init()
-    teh.loop()
+
+    if teh.cfg.eval.only:
+        teh.eval()
+    else:
+        teh.train()
 
 if __name__ == "__main__":
     main()
