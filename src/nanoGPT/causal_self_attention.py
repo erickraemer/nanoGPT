@@ -67,15 +67,15 @@ class CausalSelfAttention(Module):
         :param active_heads: an iterable of heads to enable starting at zero.
         """
 
-        mask = torch.full((self._total_heads,), False, dtype=torch.bool)
+        mask = torch.full((self._total_heads,), True, dtype=torch.bool)
         for i in active_heads:
-            mask[i] = True
+            mask[i] = False
 
         self._projection_head_mask = mask
 
         # zero inactive heads in the projection matrix
         p_heads = self.get_projection_head_view(self._c_proj.weight.data)
-        p_heads[self._projection_head_mask].zero_()
+        p_heads[self._projection_head_mask] = 0
 
     def _get_attention_func(self, cfg: GPTConfig) -> AttentionFunction:
         """
@@ -97,7 +97,7 @@ class CausalSelfAttention(Module):
 
         masked_grad = self.get_projection_head_view(grad)
         self._last_c_proj_grad = masked_grad.clone().detach()
-        masked_grad[self._projection_head_mask].zero_()
+        masked_grad[self._projection_head_mask] = 0
         return grad
 
     def flash_attention(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
