@@ -334,30 +334,47 @@ class TrainEvalHandler:
         metrics.update(metadata)
         wandb.log(metrics)
 
+    @torch.no_grad()
     def head_dropout_eval(self):
         losses = {
             "iter": self.iter_num
         }
 
-        baseline_v_loss = self.estimate_val_loss()
+        baseline_loss = torch.zeros(self.cfg.eval.iters)
+        dropout_loss = torch.zeros((self.cfg.model.layer, self.cfg.model.heads, self.cfg.eval.iters))
+        for k in range(self.cfg.eval.iters):
+            # use the same batch for all evals
+            X, Y = self.data_loader.get_batch("val")
 
-        for layer, decoder_block in enumerate(self.model.get_decoder_blocks()):
-            # backup c_proj weight
-            attn = decoder_block.attn
-            weight = attn._c_proj.weight.data.clone()
-            head_mask = attn._projection_head_mask.clone()
+            with self.ctx:
+                _, loss = self.model(X, Y)
+            baseline_loss[k] = loss.item()
 
-            for head in range(decoder_block.attn.total_heads):
-                # disable heads (this modifies the c_proj in this layer)
-                attn.set_disabled_heads([head])
+            for layer, decoder_block in enumerate(self.model.get_decoder_blocks()):
+                # backup c_proj weight
+                attn = decoder_block.attn
+                weight = attn._c_proj.weight.data.clone()
+                mask = attn._projection_head_mask.clone()
 
-                v_loss = self.estimate_val_loss()
-                val_delta = v_loss - baseline_v_loss
-                losses[f"head_importance/layer{layer:02}/head{head:02}"] = val_delta.item()
+                for head in range(decoder_block.attn.total_heads):
+                    # disable heads (this modifies the c_proj in this layer)
+                    attn.set_disabled_heads([head])
 
-                # restore c_proj
-                attn._c_proj.weight.data = weight.clone()
-                attn._projection_head_mask = head_mask.clone()
+                    with self.ctx:
+                        _, loss = self.model(X, Y)
+                    dropout_loss[layer, head, k] = loss.item()
+
+                    # restore c_proj
+                    attn._c_proj.weight.data = weight.clone()
+                    attn._projection_head_mask.data = mask.clone()
+
+        baseline_loss = baseline_loss.mean()
+        dropout_loss = dropout_loss.mean(dim=2, keepdim=True)
+        delta_loss = dropout_loss - baseline_loss
+
+        for layer in range(self.cfg.model.layer):
+            for head in range(self.cfg.model.heads):
+                losses[f"head_importance/layer{layer:02}/head{head:02}"] = delta_loss[layer, head].item()
 
         wandb.log(losses)
 
