@@ -194,12 +194,12 @@ class TrainEvalHandler:
         norms: dict[str, float] = {}
 
         attention_heads = attn.get_attention_head_gradients()
-        attention_heads = attention_heads.view(len(attention_heads), -1)  # flatten
+        attention_heads = attention_heads.reshape(len(attention_heads), -1)  # flatten
 
         c_attn_opt_state = self.optimizer.state[attn._c_attn.weight]
         v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + self.optimizer.param_groups[0]['eps'])
         v_sq = attn.get_attention_head_view(v_sq)
-        v_sq = v_sq.view(len(attention_heads), -1)  # flatten
+        v_sq = v_sq.reshape(len(attention_heads), -1)  # flatten
 
         head_norms = torch.linalg.norm(attention_heads, dim=1)  # copy
         transformed_norms = torch.linalg.norm(attention_heads / v_sq, dim=1)  # copy
@@ -241,7 +241,7 @@ class TrainEvalHandler:
 
         c_attn = attn._c_attn.weight.data.detach()
         heads = attn.get_attention_head_view(c_attn)
-        heads = heads.view(len(heads), -1)  # flatten
+        heads = heads.reshape(len(heads), -1)  # flatten
 
         mean = torch.mean(heads, dim=1)
         variance = torch.std(heads, dim=1)
@@ -376,7 +376,8 @@ class TrainEvalHandler:
             for head in range(self.cfg.model.heads):
                 losses[f"head_importance/layer{layer:02}/head{head:02}"] = delta_loss[layer, head].item()
 
-        wandb.log(losses)
+        if self.cfg.logging.wandb:
+            wandb.log(losses)
 
     def train(self):
         X, Y = self.data_loader.get_batch('train')  # fetch the very first batch
