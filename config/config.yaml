@@ -9,7 +9,7 @@ wandb:
   # NSA2: New Self Attention 2
 
 logging:
-  wandb: True
+  wandb: False
   interval: 200
 
 eval:
@@ -17,12 +17,18 @@ eval:
   interval: 100
   iters: 200
 
+metrics:
+  head_dropout: False
+  attention_head_norms: False
+  projection_head_norms: False
+  attention_head_distribution: False
+
 checkpointing:
   out_dir: "out"
   interval: 10_000
 
 data:
-  path: "/home/ekraemer/nanoGPT/data"
+  path: "/home/eric/Documents/nanoGPT/data"
   dataset: "openwebtext"
   gradient_accumulation_steps: 5
   batch_size: 8
@@ -31,8 +37,8 @@ data:
 model:
   seed: 1337
   checkpoint: ""
-  layer: 8
-  heads: 8
+  layer: 4
+  heads: 4
   embedding_size: 512
   vocab_size: 50304
   dropout_rate: 0.0
@@ -41,7 +47,7 @@ model:
   dtype: "bfloat16"
 
 head_activation_schedule:
-  0: 8
+  0: 4
 
 adamw:
   beta1: 0.9

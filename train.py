@@ -262,14 +262,17 @@ class TrainEvalHandler:
         for layer, block in enumerate(model.get_decoder_blocks()):
             attn: CausalSelfAttention = block.attn
 
-            attention_norms = self.log_attention_head_norms(attn, layer)
-            metrics.update(attention_norms)
+            if self.cfg.metrics.attention_head_norms:
+                attention_norms = self.log_attention_head_norms(attn, layer)
+                metrics.update(attention_norms)
 
-            projection_norms = self.log_projection_head_norms(attn, layer)
-            metrics.update(projection_norms)
+            if self.cfg.metrics.projection_head_norms:
+                projection_norms = self.log_projection_head_norms(attn, layer)
+                metrics.update(projection_norms)
 
-            distributions = self.log_head_distributions(attn, layer)
-            metrics.update(distributions)
+            if self.cfg.metrics.attention_head_distribution:
+                distributions = self.log_head_distributions(attn, layer)
+                metrics.update(distributions)
 
         # calculate exponential moving average (ema)
         period: int = 1000
@@ -287,12 +290,14 @@ class TrainEvalHandler:
 
         self.last_norms = metrics.copy()
 
+        if len(metrics.keys()) <= 1:
+            return
+
         # only return here to be able to debug this
         if not self.cfg.logging.wandb:
             return
 
-        if iter_num % self.cfg.eval.interval == 0:
-            wandb.log(metrics)
+        wandb.log(metrics)
 
     def create_checkpoint(self):
         checkpoint = {
@@ -408,14 +413,18 @@ class TrainEvalHandler:
                     decoder_block.attn.set_active_heads(range(new_active_heads))
                 active_heads = new_active_heads
 
+            do_eval: bool = self.iter_num % self.cfg.eval.interval == 0
+
             # evaluate the loss on train/val sets and write checkpoints
-            if self.iter_num % cfg.eval.interval == 0:
+            if do_eval:
                 self.eval({
                     "lr": lr,
                     "mfu": running_mfu * 100,  # convert to percentage
                     "n_active_heads": active_heads,
                 })
-                self.head_dropout_eval()
+
+                if self.cfg.metrics.head_dropout:
+                    self.head_dropout_eval()
 
             if self.iter_num % cfg.checkpointing.interval == 0 and self.iter_num > self.start_iter:
                 self.create_checkpoint()
@@ -439,7 +448,8 @@ class TrainEvalHandler:
             scaler.step(optimizer)
 
             # log gradients to wandb
-            self.log_metrics(model, self.iter_num)
+            if do_eval:
+                self.log_metrics(model, self.iter_num)
 
             scaler.update()
             # flush the gradients as soon as we can, no need for this memory anymore

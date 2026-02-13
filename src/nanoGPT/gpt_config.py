@@ -24,6 +24,13 @@ class EvalConfig:
     iters: int = 200
 
 @dataclass
+class MetricConfig:
+    head_dropout: bool = False
+    attention_head_norms: bool = False
+    projection_head_norms: bool = False
+    attention_head_distribution: bool = False
+
+@dataclass
 class CheckpointingConfig:
     out_dir: str = "out"
     interval: int = 10_000
@@ -78,6 +85,7 @@ class GPTConfig:
     wandb: WandbConfig
     logging: LoggingConfig
     eval: EvalConfig
+    metrics: MetricConfig
     checkpointing: CheckpointingConfig
     data: DataConfig
     model: ModelConfig
