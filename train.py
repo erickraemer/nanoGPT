@@ -219,6 +219,8 @@ class TrainEvalHandler:
         norms: dict[str, float] = {}
 
         projection_heads = attn.get_projection_head_gradients()
+        projection_heads = projection_heads.reshape(len(projection_heads), -1) # flatten
+
         c_proj_opt_state = self.optimizer.state[attn._c_proj.weight]
         v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + self.optimizer.param_groups[0]['eps'])
         v_sq = attn.get_projection_head_view(v_sq)
