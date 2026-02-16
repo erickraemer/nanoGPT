@@ -22,20 +22,21 @@ class CausalSelfAttention(Module):
         # projection head mask: true = disabled, false = enabled
         self._projection_head_mask: Tensor = torch.full((self._total_heads,), False, dtype=torch.bool)
         self._embedding_size: int = cfg.model.embedding_size
-        self._head_size: int = self._embedding_size // self._total_heads
+        self._head_size: int = cfg.model.head_dimension
+        self._head_dim: int = cfg.model.head_dimension * cfg.model.heads
         self._dropout_rate = cfg.model.dropout_rate
 
         # key, query, value projections for all heads, but in a batch
-        self._c_attn: Final[Linear] = Linear(cfg.model.embedding_size, 3 * cfg.model.embedding_size, bias=cfg.model.bias)
+        self._c_attn: Final[Linear] = Linear(cfg.model.embedding_size, 3 * self._head_dim, bias=cfg.model.bias)
 
         # output projection
-        self._c_proj: Final[Linear] = Linear(cfg.model.embedding_size, cfg.model.embedding_size, bias=cfg.model.bias)
+        self._c_proj: Final[Linear] = Linear(self._head_dim, cfg.model.embedding_size, bias=cfg.model.bias)
         self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
         self._last_c_proj_grad: Tensor | None = None
 
         # regularization
-        self._attn_dropout = Dropout(cfg.model.dropout_rate)
-        self._resid_dropout = Dropout(cfg.model.dropout_rate)
+        # self._attn_dropout = Dropout(cfg.model.dropout_rate)
+        # self._resid_dropout = Dropout(cfg.model.dropout_rate)
 
         # choose whether to use flash attention or manual attention
         self._attention_func: Final[AttentionFunction] = self._get_attention_func(cfg)
@@ -144,14 +145,14 @@ class CausalSelfAttention(Module):
     def get_attention_head_view(self, weight: Tensor) -> Tensor:
         """
         Returns a view of the attention weight with the
-        shape (total_heads, 3 (K, Q, V), head_size, embed_size).
+        shape (total_heads, head_size, 3 (K, Q, V), embed_size).
         """
 
         # attention weight shape is (3xEmbedding Size, Embedding Size)
-        heads = weight.view(3, self._total_heads, self._head_size, self.embedding_size)
-        heads = heads.transpose(0, 1)
+        heads = weight.view(self._total_heads, self._head_size, 3, self.embedding_size)
+        # heads = heads.transpose(0, 1)
 
-        assert heads.shape == (self._total_heads, 3, self._head_size, self._embedding_size)
+        # assert heads.shape == (self._total_heads, self._head_size, self._embedding_size)
 
         return heads
 
@@ -178,22 +179,22 @@ class CausalSelfAttention(Module):
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
-        # multiply by attention weight to get the shape (batch size, sequence length, 3 x embedding size)
+        # multiply by attention weight to get the shape (batch size, sequence length, 3 x total heads x head size)
         x: Tensor = self._c_attn(x)
 
-        # create a view of shape (batch size, sequence length, 3, total heads, head size)
-        # where: 3 x total heads x head size = 3 x embedding size
-        attn = x.view(B, T, 3, self._total_heads, self._head_size)
+        # create a view of shape (batch size, sequence length, total heads, head size, 3)
+        # where: 3 x total heads x head size = 3 x head dim
+        attn = x.view(B, T, self._total_heads, self._head_size, 3)
 
-        # move dimension to get (batch size, 3, total heads, sequence length, head size)
-        attn = attn.movedim(1, 3)
+        # move dimension to get (batch size, total heads, sequence length, head size, 3)
+        attn = attn.movedim(1, 2)
 
         # unbind to get q, k, v of shape (batch size, total heads, sequence length, head size)
-        q, k, v = attn.unbind(dim=1)
+        q, k, v = attn.unbind(dim=-1)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # causal self-attention -> (batch size, total heads, sequence length, head size)
         y = self._attention_func(q, k, v)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
+        y = y.transpose(1, 2).contiguous().view(B, T, self._head_dim)  # re-assemble all head outputs side by side
 
         # output projection
         # y = self._resid_dropout(self._c_proj(y))

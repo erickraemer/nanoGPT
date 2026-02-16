@@ -50,6 +50,7 @@ class ModelConfig:
     layer: int = 12
     heads: int = 12
     embedding_size: int = 768
+    head_dimension: int = 64
     vocab_size: int = 50304
     dropout_rate: float = 0.0
     bias: bool = False

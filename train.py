@@ -221,9 +221,11 @@ class TrainEvalHandler:
         projection_heads = attn.get_projection_head_gradients()
         c_proj_opt_state = self.optimizer.state[attn._c_proj.weight]
         v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + self.optimizer.param_groups[0]['eps'])
-        v_sq = v_sq.view(attn.embedding_size, attn.total_heads, attn.head_size).transpose(0, 1)  # view
-        transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=(1, 2))  # copy
-        projection_head_norms = torch.linalg.norm(projection_heads, dim=(1, 2))  # copy
+        v_sq = attn.get_projection_head_view(v_sq)
+        v_sq = v_sq.reshape(len(projection_heads), -1)
+
+        projection_head_norms = torch.linalg.norm(projection_heads, dim=1)  # copy
+        transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=1)  # copy
 
         for i in range(attn.total_heads):
             norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = projection_head_norms[i].item()
