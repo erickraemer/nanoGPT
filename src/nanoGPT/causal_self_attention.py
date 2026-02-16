@@ -126,7 +126,7 @@ class CausalSelfAttention(Module):
         att = (query @ key.transpose(-2, -1)) * (1.0 / math.sqrt(key.size(-1)))
         att = att.masked_fill(self._bias[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        att = self._attn_dropout(att)
+        # att = self._attn_dropout(att)
         att = att @ value
 
         return att
@@ -136,7 +136,7 @@ class CausalSelfAttention(Module):
         Returns a view of the projection heads.
         """
 
-        weight = weight.data.view(self._embedding_size, self._total_heads, self._head_size)
+        weight = weight.view(self._embedding_size, self._total_heads, self._head_size)
         weight = weight.transpose(0, 1)
 
         assert weight.shape == (self._total_heads, self._embedding_size, self._head_size)
@@ -145,11 +145,11 @@ class CausalSelfAttention(Module):
     def get_attention_head_view(self, weight: Tensor) -> Tensor:
         """
         Returns a view of the attention weight with the
-        shape (total_heads, head_size, 3 (K, Q, V), embed_size).
+        shape (total_heads, 3 (K, Q, V), head_size, embed_size).
         """
 
         # attention weight shape is (3xEmbedding Size, Embedding Size)
-        heads = weight.view(self._total_heads, self._head_size, 3, self.embedding_size)
+        heads = weight.view(self._total_heads, 3, self._head_size, self.embedding_size)
         # heads = heads.transpose(0, 1)
 
         # assert heads.shape == (self._total_heads, self._head_size, self._embedding_size)
@@ -182,15 +182,15 @@ class CausalSelfAttention(Module):
         # multiply by attention weight to get the shape (batch size, sequence length, 3 x total heads x head size)
         x: Tensor = self._c_attn(x)
 
-        # create a view of shape (batch size, sequence length, total heads, head size, 3)
+        # create a view of shape (batch size, sequence length, total heads, 3, head size)
         # where: 3 x total heads x head size = 3 x head dim
-        attn = x.view(B, T, self._total_heads, self._head_size, 3)
+        attn = x.view(B, T, self._total_heads, 3, self._head_size)
 
-        # move dimension to get (batch size, total heads, sequence length, head size, 3)
+        # move dimension to get (batch size, total heads, sequence length, 3, head size)
         attn = attn.movedim(1, 2)
 
         # unbind to get q, k, v of shape (batch size, total heads, sequence length, head size)
-        q, k, v = attn.unbind(dim=-1)
+        q, k, v = attn.unbind(dim=3)
 
         # causal self-attention -> (batch size, total heads, sequence length, head size)
         y = self._attention_func(q, k, v)
