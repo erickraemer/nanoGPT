@@ -54,6 +54,7 @@ class TrainEvalHandler:
         least_busy_gpu: util.NvidiaGPU = min(gpus, key=lambda gpu: gpu.rank())
         print(f"Using {least_busy_gpu.name} ({least_busy_gpu.id})\n")
         device = f'cuda:{least_busy_gpu.id}'  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+        torch.cuda.set_device(device)
         self.device = device
 
         checkpoint = None
