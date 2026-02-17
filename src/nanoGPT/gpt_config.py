@@ -1,5 +1,5 @@
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
@@ -83,18 +83,18 @@ class DDPConfig:
 
 @dataclass
 class GPTConfig:
-    wandb: WandbConfig
-    logging: LoggingConfig
-    eval: EvalConfig
-    metrics: MetricConfig
-    checkpointing: CheckpointingConfig
-    data: DataConfig
-    model: ModelConfig
-    adamw: AdamWConfig
-    optimizer: OptimizerConfig
-    lr_scheduler: LRSchedulerConfig
-    head_activation_schedule: dict[int, int]
-    ddp: DDPConfig
+    wandb: WandbConfig = field(default_factory=WandbConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
+    metrics: MetricConfig = field(default_factory=MetricConfig)
+    checkpointing: CheckpointingConfig = field(default_factory=CheckpointingConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    adamw: AdamWConfig = field(default_factory=AdamWConfig)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    lr_scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
+    head_activation_schedule: dict[int, int] = field(default_factory=dict)
+    ddp: DDPConfig = field(default_factory=DDPConfig)
     flash: bool | None = None
     checkpoint_folder: Path | None = None
 

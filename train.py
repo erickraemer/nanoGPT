@@ -160,6 +160,7 @@ class TrainEvalHandler:
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
         return self.cfg.lr_scheduler.min_lr + coeff * (self.cfg.optimizer.learning_rate - self.cfg.lr_scheduler.min_lr)
 
+    @torch.no_grad()
     def log_attention_head_norms(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
         norms: dict[str, float] = {}
 
@@ -185,6 +186,7 @@ class TrainEvalHandler:
 
         return norms
 
+    @torch.no_grad()
     def log_projection_head_norms(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
         norms: dict[str, float] = {}
 
@@ -210,6 +212,7 @@ class TrainEvalHandler:
 
         return norms
 
+    @torch.no_grad()
     def log_head_distributions(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
         distributions: dict[str, float] = {}
 
@@ -229,6 +232,7 @@ class TrainEvalHandler:
 
         return distributions
 
+    @torch.no_grad()
     def log_metrics(self, model: GPT, iter_num: int):
 
         # log gradients of all heads
@@ -273,6 +277,7 @@ class TrainEvalHandler:
 
         wandb.log(metrics)
 
+    @torch.no_grad()
     def create_checkpoint(self):
         checkpoint = {
             'model': self.model.state_dict(),
@@ -292,6 +297,7 @@ class TrainEvalHandler:
 
         torch.save(checkpoint, self.cfg.checkpoint_folder / f"ckpt_{iter}.pt")
 
+    @torch.no_grad()
     def eval(self, metadata: dict | None = None):
 
         if metadata is None:
