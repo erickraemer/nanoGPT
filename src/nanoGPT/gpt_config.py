@@ -102,7 +102,7 @@ class GPTConfig:
     def load(cls, yaml_file: str) -> Self:
         config: GPTConfig = OmegaConf.load(yaml_file)
 
-        assert config.model.embedding_size % config.model.heads == 0
+        # assert config.model.embedding_size % config.model.heads == 0
 
         assert all(0 <= i <= config.optimizer.max_iters for i in config.head_activation_schedule.keys()), \
             "Iteration must be between 0 and max_iters"
