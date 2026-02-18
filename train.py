@@ -254,21 +254,21 @@ class TrainEvalHandler:
 
         # calculate exponential moving average (ema)
         period: int = 1000
-        alpha = 2 / (period + 1)
+        alpha = 1.0 / (period + 1)
+        bias_correction = 1.0 / (1 - (1 - alpha)**(iter_num+1))
 
-        for k, v in self.last_metrics.items():
+        for k, v in metrics.items():
             if k == "iter":
                 continue
 
             if not (isinstance(v, float) or isinstance(v, int)):
                 continue
 
-            if k not in metrics:
-                continue
+            last_v = self.last_metrics.get(k, v)
 
-            metrics[k] = alpha * metrics[k] + (1 - alpha) * v
-
-        self.last_metrics = metrics.copy()
+            ema = alpha * v + (1 - alpha) * last_v
+            self.last_metrics[k] = ema
+            metrics[k] = ema * bias_correction
 
         if len(metrics.keys()) <= 1:
             return
