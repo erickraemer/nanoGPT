@@ -48,6 +48,9 @@ class TrainEvalHandler:
             raise RuntimeError("Please provide the path to your config.yaml file as argument")
         cfg: GPTConfig = GPTConfig.load(arg)
 
+        # set random seed
+        torch.manual_seed(cfg.model.seed)
+
         if cfg.logging.wandb:
             wandb.init(project=cfg.wandb.project_name, name=cfg.wandb.run_name, config=OmegaConf.to_container(cfg, resolve=True))
             wandb.define_metric(name="iterations", step_metric="iter")
@@ -79,8 +82,6 @@ class TrainEvalHandler:
         model = GPT(cfg)
         model.to(device)
 
-        # set seed and tensor types
-        torch.manual_seed(cfg.model.seed)
         torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
         torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
         device_type = 'cuda' if device.startswith('cuda') else 'cpu'  # for later use in torch.autocast
