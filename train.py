@@ -2,7 +2,7 @@ import math
 import sys
 import time
 from contextlib import nullcontext
-from typing import Literal
+from typing import Literal, Self
 
 import torch
 from omegaconf import OmegaConf
@@ -15,23 +15,28 @@ from nanoGPT.causal_self_attention import CausalSelfAttention
 from nanoGPT.data_loader import DataLoader
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
+from nanoGPT.metrics import get_attention_head_norms, get_head_distributions, get_projection_head_norms
 
 
 class TrainEvalHandler:
-    def __init__(self):
-        self.model: GPT | None = None
-        self.cfg: GPTConfig | None = None
-        self.device: str | None = None
-        self.data_loader: DataLoader | None = None
-        self.optimizer: torch.optim.Optimizer | None = None
-        self.scaler: torch.cuda.amp.GradScaler | None = None
-        self.ctx: nullcontext | torch.amp.autocast | None = None
+    def __init__(self, model: GPT, cfg: GPTConfig, device: str, data_loader: DataLoader, optimizer: torch.optim.Optimizer, scaler: torch.cuda.amp.GradScaler, ctx: nullcontext | torch.amp.autocast) -> None:
+        self.model: GPT = model
+        self.cfg: GPTConfig = cfg
+        self.device: str = device
+        self.data_loader: DataLoader = data_loader
+        self.optimizer: torch.optim.Optimizer = optimizer
+        self.scaler: torch.cuda.amp.GradScaler = scaler
+        self.ctx: nullcontext | torch.amp.autocast = ctx
         self.iter_num: int = 0
         self.start_iter: int = 0
         self.best_val_loss: float = float('inf')
         self.last_metrics: dict[str, int | float] = {}
 
-    def init(self):
+    @classmethod
+    def create(cls) -> Self:
+        """
+        Factory method to create a new TrainEvalHandler instance
+        """
 
         # load config
         if len(sys.argv) < 2:
@@ -42,7 +47,6 @@ class TrainEvalHandler:
         if '=' in arg:
             raise RuntimeError("Please provide the path to your config.yaml file as argument")
         cfg: GPTConfig = GPTConfig.load(arg)
-        self.cfg = cfg
 
         if cfg.logging.wandb:
             wandb.init(project=cfg.wandb.project_name, name=cfg.wandb.run_name, config=OmegaConf.to_container(cfg, resolve=True))
@@ -55,7 +59,6 @@ class TrainEvalHandler:
         print(f"Using {least_busy_gpu.name} ({least_busy_gpu.id})\n")
         device = f'cuda:{least_busy_gpu.id}'  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
         torch.cuda.set_device(device)
-        self.device = device
 
         checkpoint = None
         if cfg.model.checkpoint:
@@ -75,29 +78,39 @@ class TrainEvalHandler:
 
         model = GPT(cfg)
         model.to(device)
-        self.model = model
 
         # set seed and tensor types
-        torch.manual_seed(self.cfg.model.seed)
+        torch.manual_seed(cfg.model.seed)
         torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
         torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
-        device_type = 'cuda' if self.device.startswith('cuda') else 'cpu'  # for later use in torch.autocast
+        device_type = 'cuda' if device.startswith('cuda') else 'cpu'  # for later use in torch.autocast
         # note: float16 data type will automatically use a GradScaler
-        ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[self.cfg.model.dtype]
-        self.ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)#
+        ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[cfg.model.dtype]
+        ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)#
 
         # initialize a GradScaler. If enabled=False scaler is a no-op
-        scaler = torch.amp.GradScaler(enabled=(self.cfg.model.dtype == 'float16'))
-        self.scaler = scaler
+        scaler = torch.amp.GradScaler(enabled=(cfg.model.dtype == 'float16'))
 
         # optimizer
         if cfg.optimizer.name == "adamw":
-            optimizer = model.get_adamw_optimizer(self.cfg, device_type)
+            optimizer = model.get_adamw_optimizer(cfg, device_type)
         elif cfg.optimizer.name == "sgd":
-            optimizer = model.get_sgd_optimizer(self.cfg, device_type)
+            optimizer = model.get_sgd_optimizer(cfg, device_type)
         else:
             raise ValueError(f"fInvalid optimizer name {cfg.optimizer.name}")
-        self.optimizer = optimizer
+
+        # create data loader
+        data_loader = DataLoader(cfg, device)
+
+        handler = cls(
+            model=model,
+            cfg=cfg,
+            optimizer=optimizer,
+            scaler=scaler,
+            data_loader=data_loader,
+            device=device,
+            ctx=ctx
+        )
 
         if checkpoint is not None:
             state_dict = checkpoint['model']
@@ -108,19 +121,18 @@ class TrainEvalHandler:
                 if k.startswith(unwanted_prefix):
                     state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
             model.load_state_dict(state_dict)
-            self.iter_num: int = checkpoint['iter_num']
-            self.start_iter = self.iter_num
-            self.best_val_loss = checkpoint['best_val_loss']
+            handler.iter_num = checkpoint['iter_num']
+            handler.start_iter = handler.iter_num
+            handler.best_val_loss = checkpoint['best_val_loss']
 
             optimizer.load_state_dict(checkpoint['optimizer'])
             scaler.load_state_dict(checkpoint['scaler'])
 
-        # create data loader
-        self.data_loader = DataLoader(self.cfg, device)
-
         if cfg.model.compile:
             print("compiling the model... (takes a ~minute)")
-            self.model = torch.compile(model)  # requires PyTorch 2.0
+            handler.model = torch.compile(model)  # requires PyTorch 2.0
+
+        return handler
 
     @torch.no_grad()
     def _estimate_loss(self, dataset: Literal["train", "val"]) -> Tensor:
@@ -161,99 +173,36 @@ class TrainEvalHandler:
         return self.cfg.lr_scheduler.min_lr + coeff * (self.cfg.optimizer.learning_rate - self.cfg.lr_scheduler.min_lr)
 
     @torch.no_grad()
-    def log_attention_head_norms(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
-        norms: dict[str, float] = {}
-
-        attention_heads = attn.get_attention_head_gradients()
-        attention_heads = attention_heads.reshape(len(attention_heads), -1)  # flatten
-
-        c_attn_opt_state = self.optimizer.state[attn._c_attn.weight]
-        v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + self.optimizer.param_groups[0]['eps'])
-        v_sq = attn.get_attention_head_view(v_sq)
-        v_sq = v_sq.reshape(len(attention_heads), -1)  # flatten
-
-        head_norms = torch.linalg.norm(attention_heads, dim=1)  # copy
-        transformed_norms = torch.linalg.norm(attention_heads / v_sq, dim=1)  # copy
-
-        for i in range(attn.total_heads):
-            norms[f"gradient_norm/layer{layer:02}/c_attn/head{i:02}"] = head_norms[i].item()
-            norms[f"transformed_norm/layer{layer:02}/c_attn/head{i:02}"] = transformed_norms[i].item()
-
-        layer_norm = torch.linalg.norm(attention_heads)
-        transformed_layer_norm = torch.linalg.norm(attention_heads / v_sq)
-        norms[f"gradient_norm/layer{layer:02}/c_attn/total"] = layer_norm.item()
-        norms[f"transformed_norm/layer{layer:02}/c_attn/total"] = transformed_layer_norm.item()
-
-        return norms
-
-    @torch.no_grad()
-    def log_projection_head_norms(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
-        norms: dict[str, float] = {}
-
-        projection_heads = attn.get_projection_head_gradients()
-        projection_heads = projection_heads.reshape(len(projection_heads), -1) # flatten
-
-        c_proj_opt_state = self.optimizer.state[attn._c_proj.weight]
-        v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + self.optimizer.param_groups[0]['eps'])
-        v_sq = attn.get_projection_head_view(v_sq)
-        v_sq = v_sq.reshape(len(projection_heads), -1)
-
-        projection_head_norms = torch.linalg.norm(projection_heads, dim=1)  # copy
-        transformed_norms = torch.linalg.norm(projection_heads / v_sq, dim=1)  # copy
-
-        for i in range(attn.total_heads):
-            norms[f"gradient_norm/layer{layer:02}/c_proj/head{i:02}"] = projection_head_norms[i].item()
-            norms[f"transformed_norm/layer{layer:02}/c_proj/head{i:02}"] = transformed_norms[i].item()
-
-        layer_norm = torch.linalg.norm(projection_heads)
-        transformed_layer_norm = torch.linalg.norm(projection_heads / v_sq)
-        norms[f"gradient_norm/layer{layer:02}/c_proj/total"] = layer_norm.item()
-        norms[f"transformed_norm/layer{layer:02}/c_proj/total"] = transformed_layer_norm.item()
-
-        return norms
-
-    @torch.no_grad()
-    def log_head_distributions(self, attn: CausalSelfAttention, layer: int) -> dict[str, float]:
-        distributions: dict[str, float] = {}
-
-        c_attn = attn._c_attn.weight.data.detach()
-        heads = attn.get_attention_head_view(c_attn)
-        heads = heads.reshape(len(heads), -1)  # flatten
-
-        mean = torch.mean(heads, dim=1)
-        variance = torch.std(heads, dim=1)
-
-        for i in range(attn.total_heads):
-            distributions[f"mean/layer{layer:02}/c_attn/head{i:02}"] = mean[i].item()
-            distributions[f"variance/layer{layer:02}/c_attn/head{i:02}"] = variance[i].item()
-
-        distributions[f"mean/layer{layer:02}/c_attn/total"] = torch.mean(c_attn, dim=(0, 1)).item()
-        distributions[f"variance/layer{layer:02}/c_attn/total"] = torch.std(c_attn, dim=(0, 1)).item()
-
-        return distributions
-
-    @torch.no_grad()
     def log_metrics(self, model: GPT, iter_num: int):
 
-        # log gradients of all heads
+        if not (
+            self.cfg.metrics.attention_head_norms
+            or self.cfg.metrics.projection_head_norms
+            or self.cfg.metrics.attention_head_distribution
+        ):
+            # return if no metrics are enabled
+            return
+
         metrics: dict[str, int | float | CustomChart] = {"iter": iter_num}
+
+        # log metrics for all layers
         for layer, block in enumerate(model.get_decoder_blocks()):
             attn: CausalSelfAttention = block.attn
 
             if self.cfg.metrics.attention_head_norms:
-                attention_norms = self.log_attention_head_norms(attn, layer)
+                attention_norms = get_attention_head_norms(attn, self.optimizer, layer)
                 metrics.update(attention_norms)
 
             if self.cfg.metrics.projection_head_norms:
-                projection_norms = self.log_projection_head_norms(attn, layer)
+                projection_norms = get_projection_head_norms(attn, self.optimizer, layer)
                 metrics.update(projection_norms)
 
             if self.cfg.metrics.attention_head_distribution:
-                distributions = self.log_head_distributions(attn, layer)
+                distributions = get_head_distributions(attn, layer)
                 metrics.update(distributions)
 
         # calculate exponential moving average (ema)
-        period: int = 1000
+        period: int = 500
         alpha = 1.0 / (period + 1)
         bias_correction = 1.0 / (1 - (1 - alpha)**(iter_num+1))
 
@@ -458,8 +407,7 @@ class TrainEvalHandler:
                 break
 
 def main():
-    teh = TrainEvalHandler()
-    teh.init()
+    teh = TrainEvalHandler.create()
 
     if teh.cfg.eval.only:
         teh.eval()
