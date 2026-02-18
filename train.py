@@ -29,7 +29,7 @@ class TrainEvalHandler:
         self.iter_num: int = 0
         self.start_iter: int = 0
         self.best_val_loss: float = float('inf')
-        self.last_norms: dict[str, int | float] = {}
+        self.last_metrics: dict[str, int | float] = {}
 
     def init(self):
 
@@ -256,17 +256,19 @@ class TrainEvalHandler:
         period: int = 1000
         alpha = 2 / (period + 1)
 
-        for k, v in metrics.items():
+        for k, v in self.last_metrics.items():
             if k == "iter":
                 continue
 
-            if not isinstance(v, float) or isinstance(v, int):
+            if not (isinstance(v, float) or isinstance(v, int)):
                 continue
 
-            last_v = self.last_norms.get(k, v)
-            metrics[k] = alpha * v + (1 - alpha) * last_v
+            if k not in metrics:
+                continue
 
-        self.last_norms = metrics.copy()
+            metrics[k] = alpha * metrics[k] + (1 - alpha) * v
+
+        self.last_metrics = metrics.copy()
 
         if len(metrics.keys()) <= 1:
             return
@@ -275,7 +277,9 @@ class TrainEvalHandler:
         if not self.cfg.logging.wandb:
             return
 
-        wandb.log(metrics)
+        # this check needs to be here and not earlier for the EMA to be updated every iteration!
+        if self.iter_num % self.cfg.eval.interval == 0:
+            wandb.log(metrics)
 
     @torch.no_grad()
     def create_checkpoint(self):
@@ -428,8 +432,7 @@ class TrainEvalHandler:
             scaler.step(optimizer)
 
             # log gradients to wandb
-            if do_eval:
-                self.log_metrics(model, self.iter_num)
+            self.log_metrics(model, self.iter_num)
 
             scaler.update()
             # flush the gradients as soon as we can, no need for this memory anymore

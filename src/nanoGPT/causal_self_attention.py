@@ -136,10 +136,10 @@ class CausalSelfAttention(Module):
         Returns a view of the projection heads.
         """
 
-        weight = weight.view(self._embedding_size, self._total_heads, self._head_size)
-        weight = weight.transpose(0, 1)
+        weight = weight.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
 
-        #assert weight.shape == (self._total_heads, self._embedding_size, self._head_size)
+        assert weight.shape == (self._total_heads, self._embedding_size, self._head_size)
+
         return weight
 
     def get_attention_head_view(self, weight: Tensor) -> Tensor:
@@ -149,11 +149,10 @@ class CausalSelfAttention(Module):
         """
 
         # attention weight shape is (3xEmbedding Size, Embedding Size)
-        heads = weight.view(3, self._total_heads, self._head_size, self.embedding_size).transpose(0, 1)
-        #heads = weight.view(self._total_heads, 3, self._head_size, self.embedding_size)
-        #heads = heads.transpose(0, 1)
+        # heads = weight.view(3, self._total_heads, self._head_size, self.embedding_size).transpose(0, 1)
+        heads = weight.view(self._total_heads, 3, self._head_size, self.embedding_size)
 
-        #assert heads.shape == (self._total_heads, 3, self._head_size, self._embedding_size)
+        assert heads.shape == (self._total_heads, 3, self._head_size, self._embedding_size)
 
         return heads
 
@@ -185,16 +184,16 @@ class CausalSelfAttention(Module):
 
         # create a view of shape (batch size, sequence length, total heads, 3, head size)
         # where: 3 x total heads x head size = 3 x head dim
-        #attn = x.view(B, T, self._total_heads, 3, self._head_size)
-        attn = x.view(B, T, 3, self._total_heads, self._head_size)
+        attn = x.view(B, T, self._total_heads, 3, self._head_size)
+        # attn = x.view(B, T, 3, self._total_heads, self._head_size)
 
         # move dimension to get (batch size, total heads, sequence length, 3, head size)
-        #attn = attn.transpose(1, 2)
-        attn = attn.movedim(1, 3)
+        attn = attn.transpose(1, 2)
+        # attn = attn.movedim(1, 3)
 
         # unbind to get q, k, v of shape (batch size, total heads, sequence length, head size)
-        #q, k, v = attn.unbind(dim=3)
-        q, k, v = attn.unbind(dim=1)
+        q, k, v = attn.unbind(dim=3)
+        # q, k, v = attn.unbind(dim=1)
 
         # causal self-attention -> (batch size, total heads, sequence length, head size)
         y = self._attention_func(q, k, v)
