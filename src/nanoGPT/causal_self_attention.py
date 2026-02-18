@@ -18,19 +18,19 @@ class CausalSelfAttention(Module):
         super().__init__()
 
         # hyperparameter
-        self._total_heads: int = cfg.model.heads
+        self._n_head: int = cfg.model.heads
         # projection head mask: true = disabled, false = enabled
-        self._projection_head_mask: Tensor = torch.full((self._total_heads,), False, dtype=torch.bool)
-        self._embedding_size: int = cfg.model.embedding_size
-        self._head_size: int = cfg.model.head_dimension
-        self._head_dim: int = cfg.model.head_dimension * cfg.model.heads
+        self._projection_head_mask: Tensor = torch.full((self._n_head,), False, dtype=torch.bool)
+        self._d_model: int = cfg.model.embedding_size
+        self._d_head: int = cfg.model.head_dimension
+        self._nd_head: int = cfg.model.head_dimension * cfg.model.heads
         self._dropout_rate = cfg.model.dropout_rate
 
         # key, query, value projections for all heads, but in a batch
-        self._c_attn: Final[Linear] = Linear(cfg.model.embedding_size, 3 * self._head_dim, bias=cfg.model.bias)
+        self._c_attn: Final[Linear] = Linear(self._d_model, 3 * self._nd_head, bias=cfg.model.bias)
 
         # output projection
-        self._c_proj: Final[Linear] = Linear(self._head_dim, cfg.model.embedding_size, bias=cfg.model.bias)
+        self._c_proj: Final[Linear] = Linear(self._nd_head, self._d_model, bias=cfg.model.bias)
         self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
         self._last_c_proj_grad: Tensor | None = None
 
@@ -43,15 +43,15 @@ class CausalSelfAttention(Module):
 
     @property
     def embedding_size(self) -> int:
-        return self._embedding_size
+        return self._d_model
 
     @property
     def head_size(self) -> int:
-        return self._head_size
+        return self._d_head
 
     @property
     def total_heads(self) -> int:
-        return self._total_heads
+        return self._n_head
 
     def set_disabled_heads(self, disabled_heads: Iterable[int]):
         """
@@ -68,7 +68,7 @@ class CausalSelfAttention(Module):
         :param active_heads: an iterable of heads to enable starting at zero.
         """
 
-        mask = torch.full((self._total_heads,), True, dtype=torch.bool)
+        mask = torch.full((self._n_head,), True, dtype=torch.bool)
         for i in active_heads:
             mask[i] = False
 
@@ -136,9 +136,9 @@ class CausalSelfAttention(Module):
         Returns a view of the projection heads.
         """
 
-        weight = weight.view(self._embedding_size, self._total_heads, self._head_size).transpose(0, 1)
+        weight = weight.view(self._d_model, self._n_head, self._d_head).transpose(0, 1)
 
-        assert weight.shape == (self._total_heads, self._embedding_size, self._head_size)
+        assert weight.shape == (self._n_head, self._d_model, self._d_head)
 
         return weight
 
@@ -150,9 +150,9 @@ class CausalSelfAttention(Module):
 
         # attention weight shape is (3xEmbedding Size, Embedding Size)
         # heads = weight.view(3, self._total_heads, self._head_size, self.embedding_size).transpose(0, 1)
-        heads = weight.view(self._total_heads, 3, self._head_size, self.embedding_size)
+        heads = weight.view(self._n_head, 3, self._d_head, self.embedding_size)
 
-        assert heads.shape == (self._total_heads, 3, self._head_size, self._embedding_size)
+        assert heads.shape == (self._n_head, 3, self._d_head, self._d_model)
 
         return heads
 
@@ -172,7 +172,7 @@ class CausalSelfAttention(Module):
 
         norms = self._last_c_proj_grad
 
-        assert norms.shape == (self._total_heads, self.embedding_size, self._head_size)
+        assert norms.shape == (self._n_head, self.embedding_size, self._d_head)
 
         return norms
 
@@ -184,7 +184,7 @@ class CausalSelfAttention(Module):
 
         # create a view of shape (batch size, sequence length, total heads, 3, head size)
         # where: 3 x total heads x head size = 3 x head dim
-        attn = x.view(B, T, self._total_heads, 3, self._head_size)
+        attn = x.view(B, T, self._n_head, 3, self._d_head)
         # attn = x.view(B, T, 3, self._total_heads, self._head_size)
 
         # move dimension to get (batch size, total heads, sequence length, 3, head size)
@@ -197,7 +197,7 @@ class CausalSelfAttention(Module):
 
         # causal self-attention -> (batch size, total heads, sequence length, head size)
         y = self._attention_func(q, k, v)
-        y = y.transpose(1, 2).contiguous().view(B, T, self._head_dim)  # re-assemble all head outputs side by side
+        y = y.transpose(1, 2).contiguous().view(B, T, self._nd_head)  # re-assemble all head outputs side by side
 
         # output projection
         # y = self._resid_dropout(self._c_proj(y))
