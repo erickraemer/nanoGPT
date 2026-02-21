@@ -2,7 +2,7 @@ import math
 import sys
 import time
 from contextlib import nullcontext
-from typing import Literal, Self
+from typing import Self
 
 import torch
 from omegaconf import OmegaConf
@@ -19,11 +19,12 @@ from nanoGPT.metrics import get_attention_head_norms, get_head_distributions, ge
 
 
 class TrainEvalHandler:
-    def __init__(self, model: GPT, cfg: GPTConfig, device: str, data_loader: DataLoader, optimizer: torch.optim.Optimizer, scaler: torch.cuda.amp.GradScaler, ctx: nullcontext | torch.amp.autocast) -> None:
+    def __init__(self, model: GPT, cfg: GPTConfig, device: str, optimizer: torch.optim.Optimizer, scaler: torch.cuda.amp.GradScaler, ctx: nullcontext | torch.amp.autocast) -> None:
         self.model: GPT = model
         self.cfg: GPTConfig = cfg
         self.device: str = device
-        self.data_loader: DataLoader = data_loader
+        self.train_data_loader: DataLoader = DataLoader(cfg, device, True)
+        self.val_data_loader: DataLoader = DataLoader(cfg, device, False)
         self.optimizer: torch.optim.Optimizer = optimizer
         self.scaler: torch.cuda.amp.GradScaler = scaler
         self.ctx: nullcontext | torch.amp.autocast = ctx
@@ -100,15 +101,11 @@ class TrainEvalHandler:
         else:
             raise ValueError(f"fInvalid optimizer name {cfg.optimizer.name}")
 
-        # create data loader
-        data_loader = DataLoader(cfg, device)
-
         handler = cls(
             model=model,
             cfg=cfg,
             optimizer=optimizer,
             scaler=scaler,
-            data_loader=data_loader,
             device=device,
             ctx=ctx
         )
@@ -136,27 +133,29 @@ class TrainEvalHandler:
         return handler
 
     @torch.no_grad()
-    def _estimate_loss(self, dataset: Literal["train", "val"]) -> Tensor:
+    def _estimate_loss(self, data_loader: DataLoader) -> Tensor:
 
         model: GPT = self.model
         model.eval()
 
         losses = torch.zeros(self.cfg.eval.iters)
-        for k in range(self.cfg.eval.iters):
-            X, Y = self.data_loader.get_batch(dataset)
+        for i, (x,y) in enumerate(data_loader):
+            if i >= self.cfg.eval.iters:
+                break
+
             with self.ctx:
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
+                logits, loss = model(x, y)
+            losses[i] = loss.item()
         loss = losses.mean()
 
         model.train()
         return loss
 
     def estimate_val_loss(self):
-        return self._estimate_loss("val")
+        return self._estimate_loss(self.val_data_loader)
 
     def estimate_train_loss(self):
-        return self._estimate_loss("train")
+        return self._estimate_loss(self.train_data_loader)
 
     # learning rate decay scheduler (cosine with warmup)
     def get_lr(self, it):
@@ -281,13 +280,13 @@ class TrainEvalHandler:
 
         baseline_loss = torch.zeros(self.cfg.eval.iters)
         dropout_loss = torch.zeros((self.cfg.model.layer, self.cfg.model.heads, self.cfg.eval.iters))
-        for k in range(self.cfg.eval.iters):
-            # use the same batch for all evals
-            X, Y = self.data_loader.get_batch("val")
+        for i, (x, y) in enumerate(self.val_data_loader):
+            if i >= self.cfg.eval.iters:
+                break
 
             with self.ctx:
-                _, loss = self.model(X, Y)
-            baseline_loss[k] = loss.item()
+                _, loss = self.model(x, y)
+            baseline_loss[i] = loss.item()
 
             for layer, decoder_block in enumerate(self.model.get_decoder_blocks()):
                 # backup c_proj weight
@@ -300,8 +299,8 @@ class TrainEvalHandler:
                     attn.set_disabled_heads([head])
 
                     with self.ctx:
-                        _, loss = self.model(X, Y)
-                    dropout_loss[layer, head, k] = loss.item()
+                        _, loss = self.model(x, y)
+                    dropout_loss[layer, head, i] = loss.item()
 
                     # restore c_proj
                     attn._c_proj.weight.data = weight.clone()
@@ -319,7 +318,8 @@ class TrainEvalHandler:
             wandb.log(losses)
 
     def train(self):
-        X, Y = self.data_loader.get_batch('train')  # fetch the very first batch
+        data_loader = iter(self.train_data_loader)
+        x, y = next(data_loader) # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0  # number of iterations in the lifetime of this process
         running_mfu = -1.0
@@ -367,10 +367,10 @@ class TrainEvalHandler:
             # and using the GradScaler if data type is float16
             for micro_step in range(cfg.data.gradient_accumulation_steps):
                 with self.ctx:
-                    logits, loss = model(X, Y)
+                    logits, loss = model(x, y)
                     loss = loss / cfg.data.gradient_accumulation_steps  # scale the loss to account for gradient accumulation
                 # immediately async prefetch next batch while model is doing the forward pass on the GPU
-                X, Y = self.data_loader.get_batch('train')
+                x, y = next(data_loader)
                 # backward pass, with gradient scaling if training in fp16
                 scaler.scale(loss).backward()
             # clip the gradient
