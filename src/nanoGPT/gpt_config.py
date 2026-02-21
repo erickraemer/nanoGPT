@@ -39,6 +39,7 @@ class CheckpointingConfig:
 class DataConfig:
     path: str = ""
     dataset: str = "openwebtext"
+    seed: int = 1337
     gradient_accumulation_steps: int = 5
     batch_size: int = 12
     block_size: int = 1024

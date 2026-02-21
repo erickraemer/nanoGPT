@@ -11,6 +11,7 @@ class DataLoader:
         self._batch_size: int = cfg.data.batch_size
         self._block_size: int = cfg.data.block_size
         self._device: str = device
+        self._seed: int = cfg.data.seed
         self._data_path: Path = Path(cfg.data.path) / cfg.data.dataset / ('train.bin' if train else 'val.bin')
 
     def __iter__(self):
@@ -43,7 +44,8 @@ class DataLoaderIterator:
         self._batch_size: int = data_loader._batch_size
         self._device: str = data_loader._device
         self._data_path: Path = data_loader._data_path
-        self._idx: int = 0
+        self._random: torch.Generator = torch.Generator()
+        self._random.manual_seed(data_loader._seed)
 
     def __iter__(self):
         return self
@@ -52,22 +54,11 @@ class DataLoaderIterator:
 
         data = np.memmap(self._data_path, dtype=np.uint16, mode='r')
 
-        start: int = self._idx * self._batch_size
-        data_length: int = self._batch_size + self._block_size
+        ix = torch.randint(len(data) - self._block_size, (self._batch_size,), generator=self._random)
+        x = torch.stack([torch.from_numpy((data[i:i+self._block_size]).astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy((data[i+1:i+1+self._block_size]).astype(np.int64)) for i in ix])
 
-        # skip last batch if it is too small
-        if start + data_length > len(data):
-            self._idx = 0
-            start = 0
-
-        self._idx += 1
-
-        array = torch.from_numpy(data[start:start + data_length].copy())
-        array = array.to(torch.int64)
-        array = array.unfold(0, self._block_size, 1)
-
-        x = array[:-1].contiguous().pin_memory().to(self._device, non_blocking=True)
-        y = array[1:].contiguous().pin_memory().to(self._device, non_blocking=True)
+        x, y = x.pin_memory().to(self._device, non_blocking=True), y.pin_memory().to(self._device, non_blocking=True)
 
         return x, y
 
@@ -82,7 +73,7 @@ class DataLoaderIterator:
 #             block_size=512,
 #         )
 #     )
-#     dl = DataLoader(cfg, device='cuda', True)
+#     dl = DataLoader(cfg, 'cuda', True)
 #     for i, (x, y) in enumerate(dl):
 #         print(x.shape, y.shape)
 #         if i > 5:
