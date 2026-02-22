@@ -228,7 +228,7 @@ class TrainEvalHandler:
 
         # this check needs to be here and not earlier for the EMA to be updated every iteration!
         if self.iter_num % self.cfg.eval.interval == 0:
-            wandb.log(metrics)
+            wandb.log(metrics, step=self.iter_num)
 
     @torch.no_grad()
     def create_checkpoint(self):
@@ -270,7 +270,7 @@ class TrainEvalHandler:
         }
 
         metrics.update(metadata)
-        wandb.log(metrics)
+        wandb.log(metrics, step=self.iter_num)
 
     @torch.no_grad()
     def head_dropout_eval(self):
@@ -315,7 +315,7 @@ class TrainEvalHandler:
                 losses[f"head_importance/layer{layer:02}/head{head:02}"] = delta_loss[layer, head].item()
 
         if self.cfg.logging.wandb:
-            wandb.log(losses)
+            wandb.log(losses, step=self.iter_num)
 
     def train(self):
         data_loader = iter(self.train_data_loader)
