@@ -34,7 +34,9 @@ class CausalSelfAttention(Module):
         self._c_proj: Final[Linear] = Linear(self._nd_head, self._d_model, bias=cfg.model.bias)
         self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
         self._last_c_proj_grad: Tensor | None = None
-        self._last_attn_entropy: Tensor | None = None
+
+        # store the attention entropy for each minibatch (batch size, heads, sequence length)
+        self._attn_entropy: list[Tensor] = []
 
         # regularization
         # self._attn_dropout = Dropout(cfg.model.dropout_rate)
@@ -84,22 +86,24 @@ class CausalSelfAttention(Module):
         """
         Returns the attention function based on whether flash attention is supported.
         """
+        if cfg.metrics.attention_entropy or not cfg.flash:
+            self.register_buffer(
+                "_bias",
+                torch.tril(torch.ones(cfg.data.block_size, cfg.data.block_size))
+                .view(1, 1, cfg.data.block_size, cfg.data.block_size)
+            )
 
-        if not cfg.metrics.attention_entropy and cfg.flash:
+        if cfg.flash:
             return self.flash_attention
 
-        self.register_buffer(
-            "_bias",
-            torch.tril(torch.ones(cfg.data.block_size, cfg.data.block_size))
-            .view(1, 1, cfg.data.block_size, cfg.data.block_size)
-        )
         return self.manual_attention
 
     def _mask_inactive_projection_gradients(self, grad: Tensor) -> Tensor:
         """Hook to zero out gradients for inactive heads in the projection matrix"""
 
         masked_grad = self.get_projection_head_view(grad)
-        self._last_c_proj_grad = masked_grad.clone().detach()
+        if self.training:
+            self._last_c_proj_grad = masked_grad.detach().clone()
         masked_grad[self._projection_head_mask] = 0
         return grad
 
@@ -129,13 +133,33 @@ class CausalSelfAttention(Module):
         att = att.masked_fill(self._bias[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         # att = self._attn_dropout(att)
-
-        if self._compute_attn_entropy:
-            self._last_attn_entropy = -(att * att.clamp(min=1e-9).log()).sum(dim=-1).mean(dim=(0,2))
-
         att = att @ value # # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         return att
+
+    @torch.no_grad()
+    def _get_attention_entropy(self, query: Tensor, key: Tensor):
+
+        query, key = query.detach().clone(), key.detach().clone()
+
+        T: int = query.shape[2]
+        att = (query @ key.transpose(-2, -1)) * (1.0 / math.sqrt(key.size(-1)))
+        att = att.masked_fill(self._bias[:, :, :T, :T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+
+        entropy = -(att * att.clamp(min=1e-9).log()).sum(dim=-1) # (batch size, heads, sequence length)
+        return entropy
+
+    def get_attention_entropy(self) -> Tensor | None:
+        """
+        Returns the attention entropy per head averaged over all minibatches since the last call to this function.
+        The shape is (heads,). Calling this function will reset the stored attention entropy.
+        """
+
+        entropy = torch.concatenate(self._attn_entropy)
+        entropy = entropy.mean(dim=(0, 2))
+        self._attn_entropy = []
+        return entropy
 
     def get_projection_head_view(self, weight: Tensor) -> Tensor:
         """
@@ -167,7 +191,7 @@ class CausalSelfAttention(Module):
         Returns a view of the attention gradients with the shape (total_heads, 3 (K, Q, V), head_size, embed_size).
         """
 
-        heads = self.get_attention_head_view(self._c_attn.weight.grad).detach()
+        heads = self.get_attention_head_view(self._c_attn.weight.grad.detach().clone())
 
         return heads
 
@@ -200,6 +224,10 @@ class CausalSelfAttention(Module):
         # unbind to get q, k, v of shape (batch size, total heads, sequence length, head size)
         q, k, v = attn.unbind(dim=3)
         # q, k, v = attn.unbind(dim=1)
+
+        if self.training and self._compute_attn_entropy:
+            self._attn_entropy.append(self._get_attention_entropy(q, k))
+            assert len(self._attn_entropy) <= 20, "Too many minibatches stored for attention entropy"
 
         # causal self-attention -> (batch size, total heads, sequence length, head size)
         y = self._attention_func(q, k, v)

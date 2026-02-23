@@ -11,7 +11,10 @@ def get_attention_head_norms(attn: CausalSelfAttention, optimizer: torch.optim.O
     attention_heads = attention_heads.reshape(len(attention_heads), -1)  # flatten
 
     c_attn_opt_state = optimizer.state[attn._c_attn.weight]
-    v_sq = torch.sqrt(c_attn_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+    exp_avg_sq = c_attn_opt_state["exp_avg_sq"].detach().clone()
+    eps: float = optimizer.param_groups[0]['eps']
+
+    v_sq = torch.sqrt(exp_avg_sq + eps)
     v_sq = attn.get_attention_head_view(v_sq)
     v_sq = v_sq.reshape(len(attention_heads), -1)  # flatten
 
@@ -38,7 +41,10 @@ def get_projection_head_norms(attn: CausalSelfAttention, optimizer: torch.optim.
     projection_heads = projection_heads.reshape(len(projection_heads), -1)  # flatten
 
     c_proj_opt_state = optimizer.state[attn._c_proj.weight]
-    v_sq = torch.sqrt(c_proj_opt_state["exp_avg_sq"] + optimizer.param_groups[0]['eps'])
+    exp_avg_sq = c_proj_opt_state["exp_avg_sq"].detach().clone()
+    eps: float = optimizer.param_groups[0]['eps']
+
+    v_sq = torch.sqrt(exp_avg_sq + eps)
     v_sq = attn.get_projection_head_view(v_sq)
     v_sq = v_sq.reshape(len(projection_heads), -1)
 
@@ -61,7 +67,7 @@ def get_projection_head_norms(attn: CausalSelfAttention, optimizer: torch.optim.
 def get_head_distributions(attn: CausalSelfAttention, layer: int) -> dict[str, float]:
     distributions: dict[str, float] = {}
 
-    c_attn = attn._c_attn.weight.data.detach()
+    c_attn = attn._c_attn.weight.data.detach().clone()
     heads = attn.get_attention_head_view(c_attn)
     heads = heads.reshape(len(heads), -1)  # flatten
 
@@ -81,7 +87,7 @@ def get_head_distributions(attn: CausalSelfAttention, layer: int) -> dict[str, f
 def get_attention_entropy(attn: CausalSelfAttention, layer: int) -> dict[str, float]:
     entropies: dict[str, float] = {}
 
-    ent = attn._last_attn_entropy
+    ent = attn.get_attention_entropy()
 
     for i in range(attn.total_heads):
         entropies[f"attn_entropy/layer{layer:02}/head{i:02}"] = ent[i].item()

@@ -136,8 +136,7 @@ class TrainEvalHandler:
     @torch.no_grad()
     def _estimate_loss(self, data_loader: DataLoader) -> Tensor:
 
-        model: GPT = self.model
-        model.eval()
+        self.model.eval()
 
         losses = torch.zeros(self.cfg.eval.iters)
         for i, (x,y) in enumerate(data_loader):
@@ -145,11 +144,11 @@ class TrainEvalHandler:
                 break
 
             with self.ctx:
-                logits, loss = model(x, y)
+                logits, loss = self.model(x, y)
             losses[i] = loss.item()
         loss = losses.mean()
 
-        model.train()
+        self.model.train()
         return loss
 
     def estimate_val_loss(self):
@@ -260,6 +259,7 @@ class TrainEvalHandler:
         t_loss = self.estimate_train_loss()
         v_loss = self.estimate_val_loss()
         print(f"step {self.iter_num}: train loss {t_loss:.4f}, val loss {v_loss:.4f}")
+
         if not self.cfg.logging.wandb:
             return
 
@@ -275,6 +275,8 @@ class TrainEvalHandler:
 
     @torch.no_grad()
     def head_dropout_eval(self):
+        self.model.eval()
+
         losses = {
             "iter": self.iter_num
         }
@@ -318,6 +320,8 @@ class TrainEvalHandler:
         if self.cfg.logging.wandb:
             wandb.log(losses, step=self.iter_num)
 
+        self.model.train()
+
     def train(self):
         data_loader = iter(self.train_data_loader)
         x, y = next(data_loader) # fetch the very first batch
@@ -331,6 +335,8 @@ class TrainEvalHandler:
         optimizer = self.optimizer
         scaler = self.scaler
         model = self.model
+
+        model.train()
 
         while True:
 
