@@ -76,3 +76,16 @@ def get_head_distributions(attn: CausalSelfAttention, layer: int) -> dict[str, f
     distributions[f"variance/layer{layer:02}/c_attn/total"] = torch.std(c_attn, dim=(0, 1)).item()
 
     return distributions
+
+@torch.no_grad()
+def get_attention_entropy(attn: CausalSelfAttention, layer: int) -> dict[str, float]:
+    entropies: dict[str, float] = {}
+
+    ent = attn._last_attn_entropy
+
+    for i in range(attn.total_heads):
+        entropies[f"attn_entropy/layer{layer:02}/head{i:02}"] = ent[i].item()
+
+    entropies[f"attn_entropy/layer{layer:02}/total"] = torch.mean(ent).item()
+
+    return entropies

@@ -1,6 +1,6 @@
 wandb:
-  project_name: "adaptive-multi-head-attention"
-  run_name: "test"
+  project_name: "test"
+  run_name: "test-attention-entropy"
   # TH:   Total Heads
   # HAS:  Head Activation Schedule
   # TE:   Token Encoding
@@ -18,18 +18,20 @@ eval:
   iters: 200
 
 metrics:
-  head_dropout: True
-  attention_head_norms: True
-  projection_head_norms: True
-  attention_head_distribution: True
+  head_dropout: False
+  attention_head_norms: False
+  projection_head_norms: False
+  attention_head_distribution: False
+  attention_entropy: True
 
 checkpointing:
   out_dir: "out"
-  interval: 10_000
+  interval: 100_000
 
 data:
   path: "/home/eric/Documents/nanoGPT/data"
   dataset: "openwebtext"
+  seed: 1337
   gradient_accumulation_steps: 5
   batch_size: 8
   block_size: 512
@@ -38,7 +40,7 @@ model:
   seed: 1337
   checkpoint: ""
   layer: 4
-  heads: 2
+  heads: 4
   embedding_size: 512
   head_dimension: 64
   vocab_size: 50304
@@ -48,8 +50,8 @@ model:
   dtype: "bfloat16"
 
 head_activation_schedule:
-  0: 1
-  8_000: 2
+  0: 2
+  4_000: 4
 
 adamw:
   beta1: 0.9

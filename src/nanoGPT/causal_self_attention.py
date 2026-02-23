@@ -18,6 +18,7 @@ class CausalSelfAttention(Module):
         super().__init__()
 
         # hyperparameter
+        self._compute_attn_entropy: bool = cfg.metrics.attention_entropy
         self._n_head: int = cfg.model.heads
         # projection head mask: true = disabled, false = enabled
         self._projection_head_mask: Tensor = torch.full((self._n_head,), False, dtype=torch.bool)
@@ -33,6 +34,7 @@ class CausalSelfAttention(Module):
         self._c_proj: Final[Linear] = Linear(self._nd_head, self._d_model, bias=cfg.model.bias)
         self._c_proj.weight.register_hook(self._mask_inactive_projection_gradients)
         self._last_c_proj_grad: Tensor | None = None
+        self._last_attn_entropy: Tensor | None = None
 
         # regularization
         # self._attn_dropout = Dropout(cfg.model.dropout_rate)
@@ -82,7 +84,8 @@ class CausalSelfAttention(Module):
         """
         Returns the attention function based on whether flash attention is supported.
         """
-        if cfg.flash:
+
+        if not cfg.metrics.attention_entropy and cfg.flash:
             return self.flash_attention
 
         self.register_buffer(
@@ -90,7 +93,6 @@ class CausalSelfAttention(Module):
             torch.tril(torch.ones(cfg.data.block_size, cfg.data.block_size))
             .view(1, 1, cfg.data.block_size, cfg.data.block_size)
         )
-
         return self.manual_attention
 
     def _mask_inactive_projection_gradients(self, grad: Tensor) -> Tensor:
@@ -127,6 +129,10 @@ class CausalSelfAttention(Module):
         att = att.masked_fill(self._bias[:, :, :T, :T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         # att = self._attn_dropout(att)
+
+        if self._compute_attn_entropy:
+            self._last_attn_entropy = -(att * att.clamp(min=1e-9).log()).sum(dim=-1).mean(dim=(0,2))
+
         att = att @ value # # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
         return att

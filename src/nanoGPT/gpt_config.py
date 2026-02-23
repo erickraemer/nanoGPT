@@ -29,6 +29,7 @@ class MetricConfig:
     attention_head_norms: bool = False
     projection_head_norms: bool = False
     attention_head_distribution: bool = False
+    attention_entropy: bool = False
 
 @dataclass
 class CheckpointingConfig:

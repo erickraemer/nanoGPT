@@ -15,7 +15,8 @@ from nanoGPT.causal_self_attention import CausalSelfAttention
 from nanoGPT.data_loader import DataLoader
 from nanoGPT.gpt import GPT
 from nanoGPT.gpt_config import GPTConfig
-from nanoGPT.metrics import get_attention_head_norms, get_head_distributions, get_projection_head_norms
+from nanoGPT.metrics import get_attention_head_norms, get_head_distributions, get_projection_head_norms, \
+    get_attention_entropy
 
 
 class TrainEvalHandler:
@@ -175,11 +176,7 @@ class TrainEvalHandler:
     @torch.no_grad()
     def log_metrics(self, model: GPT, iter_num: int):
 
-        if not (
-            self.cfg.metrics.attention_head_norms
-            or self.cfg.metrics.projection_head_norms
-            or self.cfg.metrics.attention_head_distribution
-        ):
+        if not any(b for b in self.cfg.metrics.values() if isinstance(b, bool)):
             # return if no metrics are enabled
             return
 
@@ -200,6 +197,10 @@ class TrainEvalHandler:
             if self.cfg.metrics.attention_head_distribution:
                 distributions = get_head_distributions(attn, layer)
                 metrics.update(distributions)
+
+            if self.cfg.metrics.attention_entropy:
+                entropies = get_attention_entropy(attn, layer)
+                metrics.update(entropies)
 
         # calculate exponential moving average (ema)
         period: int = 1000
