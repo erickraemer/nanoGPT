@@ -328,7 +328,14 @@ class TrainEvalHandler:
         t0 = time.time()
         local_iter_num = 0  # number of iterations in the lifetime of this process
         running_mfu = -1.0
-        active_heads: int = self.cfg.model.heads
+        num_active_heads: int = self.cfg.model.heads
+
+        start = 10
+        stop = 30
+        heads_to_add = 4
+        rate = (stop - start) // heads_to_add
+        active_heads = torch.full((self.cfg.model.layer, self.cfg.model.heads), False, dtype=torch.bool)
+        t_norms = torch.zeros((self.cfg.model.layer, self.cfg.model.heads, rate))
 
         # references
         cfg = self.cfg
@@ -346,13 +353,16 @@ class TrainEvalHandler:
                 param_group['lr'] = lr
 
             # apply head activation schedule
-            if cfg.head_activation_schedule.get(self.iter_num, active_heads) != active_heads:
+            if cfg.head_activation_schedule.get(self.iter_num, num_active_heads) != num_active_heads:
                 new_active_heads = cfg.head_activation_schedule[self.iter_num]
-                print(f"Changing active head configuration: {active_heads} -> {new_active_heads}")
+                print(f"Changing active head configuration: {num_active_heads} -> {new_active_heads}")
 
                 for decoder_block in model.get_decoder_blocks():
                     decoder_block.attn.set_active_heads(range(new_active_heads))
-                active_heads = new_active_heads
+                num_active_heads = new_active_heads
+
+                active_heads[:, :] = False
+                active_heads[:, :num_active_heads] = True
 
             do_eval: bool = self.iter_num % self.cfg.eval.interval == 0
 
@@ -361,7 +371,7 @@ class TrainEvalHandler:
                 self.eval({
                     "lr": lr,
                     "mfu": running_mfu * 100,  # convert to percentage
-                    "n_active_heads": active_heads,
+                    "n_active_heads": num_active_heads,
                 })
 
                 if self.cfg.metrics.head_dropout:
@@ -390,6 +400,30 @@ class TrainEvalHandler:
 
             # log gradients to wandb
             self.log_metrics(model, self.iter_num)
+
+            if start <= self.iter_num <= stop:
+                for i, dec in enumerate(model.get_decoder_blocks()):
+                    attn = dec.attn
+                    norms = get_projection_head_norms(attn, optimizer, i)
+                    for k in range(cfg.model.heads):
+                        t_norms[i, k, self.iter_num % rate] = norms[f"transformed_norm/layer{i:02}/c_proj/head{k:02}"]
+
+            # activate heads bases on t_norm ema
+            if (start + rate) <= self.iter_num <= stop and self.iter_num % rate == 0:
+                mha = [decoder_block.attn for decoder_block in model.get_decoder_blocks()]
+
+                for i in range(cfg.model.layer):
+                    heads = {
+                        k: t_norms[i, k, -self.iter_num:].mean().item()  # get the mean transformed norm for this head up to the current iteration
+                        for k in range(cfg.model.heads)
+                        if not active_heads[i, k]
+                    }
+                    best_head = max(heads.items(), key=lambda item: item[1])
+                    print(f"iter: {self.iter_num}: Enabling head {best_head[0]} in layer {i} with tpg_norm {best_head[1]:.4f}")
+                    active_heads[i, best_head[0]] = True
+                    mha[i].set_active_heads(active_heads[i])
+
+                num_active_heads += 1
 
             scaler.update()
             # flush the gradients as soon as we can, no need for this memory anymore
