@@ -1,4 +1,5 @@
 import math
+import random
 import sys
 import time
 from contextlib import nullcontext
@@ -401,26 +402,19 @@ class TrainEvalHandler:
             # log gradients to wandb
             self.log_metrics(model, self.iter_num)
 
-            if start <= self.iter_num <= stop:
-                for i, dec in enumerate(model.get_decoder_blocks()):
-                    attn = dec.attn
-                    norms = get_projection_head_norms(attn, optimizer, i)
-                    for k in range(cfg.model.heads):
-                        t_norms[i, k, self.iter_num % rate] = norms[f"transformed_norm/layer{i:02}/c_proj/head{k:02}"]
-
-            # activate heads bases on t_norm ema
+            # activate heads based on random selection
             if (start + rate) <= self.iter_num <= stop and self.iter_num % rate == 0:
                 mha = [decoder_block.attn for decoder_block in model.get_decoder_blocks()]
 
                 for i in range(cfg.model.layer):
-                    heads = {
-                        k: t_norms[i, k, -self.iter_num:].mean().item()  # get the mean transformed norm for this head up to the current iteration
+                    heads = [
+                        k
                         for k in range(cfg.model.heads)
                         if not active_heads[i, k]
-                    }
-                    best_head = max(heads.items(), key=lambda item: item[1])
-                    print(f"iter: {self.iter_num}: Enabling head {best_head[0]} in layer {i} with tpg_norm {best_head[1]:.4f}")
-                    active_heads[i, best_head[0]] = True
+                    ]
+                    random_head: int = random.choice(heads)
+                    print(f"iter: {self.iter_num}: Enabling random head {random_head} in layer {i}")
+                    active_heads[i, random_head] = True
                     mha[i].set_active_heads(active_heads[i])
 
                 num_active_heads += 1
