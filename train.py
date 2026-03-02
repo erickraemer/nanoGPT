@@ -330,8 +330,8 @@ class TrainEvalHandler:
         running_mfu = -1.0
         num_active_heads: int = self.cfg.model.heads
 
-        start = 10
-        stop = 30
+        start = 1000
+        stop = 2000
         heads_to_add = 4
         rate = (stop - start) // heads_to_add
         active_heads = torch.full((self.cfg.model.layer, self.cfg.model.heads), False, dtype=torch.bool)
