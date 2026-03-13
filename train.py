@@ -332,11 +332,7 @@ class TrainEvalHandler:
         num_active_heads: int = self.cfg.model.heads
 
         start = 1000
-        stop = 2000
-        heads_to_add = 4
-        rate = (stop - start) // heads_to_add
         active_heads = torch.full((self.cfg.model.layer, self.cfg.model.heads), False, dtype=torch.bool)
-        t_norms = torch.zeros((self.cfg.model.layer, self.cfg.model.heads, rate))
 
         # references
         cfg = self.cfg
@@ -403,7 +399,7 @@ class TrainEvalHandler:
             self.log_metrics(model, self.iter_num)
 
             # activate heads based on random selection
-            if (start + rate) <= self.iter_num <= stop and self.iter_num % rate == 0:
+            if self.iter_num == start:
                 mha = [decoder_block.attn for decoder_block in model.get_decoder_blocks()]
 
                 for i in range(cfg.model.layer):
