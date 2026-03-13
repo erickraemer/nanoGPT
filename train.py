@@ -331,11 +331,8 @@ class TrainEvalHandler:
         num_active_heads: int = self.cfg.model.heads
 
         start = 1000
-        stop = 2000
-        heads_to_add = 4
-        rate = (stop - start) // heads_to_add
+        # shape(layer, heads)
         active_heads = torch.full((self.cfg.model.layer, self.cfg.model.heads), False, dtype=torch.bool)
-        t_norms = torch.zeros((self.cfg.model.layer, self.cfg.model.heads, rate))
 
         # references
         cfg = self.cfg
@@ -401,29 +398,49 @@ class TrainEvalHandler:
             # log gradients to wandb
             self.log_metrics(model, self.iter_num)
 
-            if start <= self.iter_num <= stop:
-                for i, dec in enumerate(model.get_decoder_blocks()):
-                    attn = dec.attn
-                    norms = get_projection_head_norms(attn, optimizer, i)
-                    for k in range(cfg.model.heads):
-                        t_norms[i, k, self.iter_num % rate] = norms[f"transformed_norm/layer{i:02}/c_proj/head{k:02}"]
-
             # activate heads bases on t_norm ema
-            if (start + rate) <= self.iter_num <= stop and self.iter_num % rate == 0:
+            if self.iter_num == start:
                 mha = [decoder_block.attn for decoder_block in model.get_decoder_blocks()]
+
+                period: int = 1000
+                alpha = 2.0 / (period + 1)
+                bias_correction = 1.0 / (1 - (1 - alpha) ** (self.iter_num + 1))
 
                 for i in range(cfg.model.layer):
                     heads = {
-                        k: t_norms[i, k, -self.iter_num:].mean().item()  # get the mean transformed norm for this head up to the current iteration
+                        k: self.last_metrics[f"transformed_norm/layer{i:02}/c_proj/head{k:02}"] * bias_correction # get the mean transformed norm for this head up to the current iteration
                         for k in range(cfg.model.heads)
                         if not active_heads[i, k]
                     }
+
+                    keys = list(heads.keys())
+                    t = torch.tensor(list(heads.values()), dtype=torch.float32, device=self.device)
+                    probs = torch.softmax(t, dim=0)
+                    heads = dict(zip(keys, probs.tolist()))
+
+                    table = wandb.Table(columns=["head", "score"])
+                    for head, val in heads.items():
+                        table.add_data(f"H{head}", val)
+
+                    # built-in bar chart
+                    wandb.log({
+                        f"layer{i:02}_ema_scores": wandb.plot.bar(
+                            table,
+                            "head",  # x-axis
+                            "score",  # y-axis
+                            title=f"Layer {i:02} Ema Scores",
+                        )
+                    }, step=self.iter_num)
+
                     best_head = max(heads.items(), key=lambda item: item[1])
-                    print(f"iter: {self.iter_num}: Enabling head {best_head[0]} in layer {i} with tpg_norm {best_head[1]:.4f}")
+                    print(f"iter: {self.iter_num}: Enabling head {best_head[0]} in layer {i} with softmax {best_head[1]:.2f}")
                     active_heads[i, best_head[0]] = True
                     mha[i].set_active_heads(active_heads[i])
 
                 num_active_heads += 1
+                wandb.log({
+                    "active_heads": active_heads
+                }, step=self.iter_num)
 
             scaler.update()
             # flush the gradients as soon as we can, no need for this memory anymore
